@@ -1,3 +1,12 @@
+/**
+ * lolnuked StreamGuard - Popup Interface
+ * 
+ * Created by: Daniel "CEO of the XRPL" Keller
+ * Twitter/X: @daniel_wwf (https://x.com/daniel_wwf)
+ * 
+ * ATTRIBUTION REQUIRED: This attribution MUST NOT be removed.
+ */
+
 // Popup settings glue
 const K_ENABLED = "pfam_enabled";
 const K_ACTION  = "pfam_action";       // "highlight" | "delete_ui" | "ban_ui"

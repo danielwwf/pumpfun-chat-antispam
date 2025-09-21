@@ -1,4 +1,16 @@
 // Pumpfun Auto Mod — content script (3 actions only: highlight, delete via UI, ban via UI)
+/**
+ * lolnuked StreamGuard - Spam Protection for pump.fun
+ * 
+ * Created by: Daniel "CEO of the XRPL" Keller
+ * Twitter/X: @daniel_wwf (https://x.com/daniel_wwf)
+ * 
+ * ATTRIBUTION REQUIRED: This attribution MUST NOT be removed or modified.
+ * Free to use, modify, and distribute with attribution.
+ * 
+ * For the culture. For the degens. Against the spammers. 🫡
+ */
+
 (() => {
   // -------- storage keys & defaults --------
   const K_ENABLED = "pfam_enabled";

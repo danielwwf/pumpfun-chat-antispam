@@ -1,3 +1,12 @@
+/**
+ * lolnuked StreamGuard - Trigger Management
+ * 
+ * Created by: Daniel "CEO of the XRPL" Keller
+ * Twitter/X: @daniel_wwf (https://x.com/daniel_wwf)
+ * 
+ * ATTRIBUTION REQUIRED: This attribution MUST NOT be removed.
+ */
+
 // Triggers management page
 const K_CUSTOM_TRIGGERS = "pfam_custom_triggers";
 
