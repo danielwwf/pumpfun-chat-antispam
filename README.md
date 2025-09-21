@@ -1,5 +1,7 @@
 # 🛡️ lolnuked StreamGuard - Ultimate Pump.fun Spam Protection
 
+**Created by Daniel "CEO of the XRPL" Keller | [@daniel_wwf](https://x.com/daniel_wwf)**
+
 **For streamers, traders, and degens. Keep your chat clean while you focus on the charts! 🚀**
 
 > **🔒 SECURITY:** Not a wallet drainer! No data theft! 100% safe! Don't trust us? Drop the code in ChatGPT/Claude/Grok and ask them! It's open source - verify it yourself!
@@ -310,6 +312,18 @@ Found a bug? Got an idea? Want to make it even more based?
 4. Submit a PR
 5. Profit??? 📈
 
+## License 📜
+
+**MIT License with Attribution Requirement**
+
+This software is FREE to use, modify, and distribute, BUT:
+- ✅ **Attribution REQUIRED** - You MUST credit the author
+- ✅ **Author:** Daniel "CEO of the XRPL" Keller ([@daniel_wwf](https://x.com/daniel_wwf))
+- ❌ **DO NOT REMOVE** author credits from source code
+- 💡 **Optional:** Display the StreamGuard logo on your stream
+
+See [LICENSE](LICENSE) file for full details.
+
 ## Legal Shit (CYA) ⚖️
 
 This extension automates UI interactions on pump.fun. Use at your own risk. Not responsible if you get banned, lose money, or miss the next 1000x because you were too busy configuring the extension.
@@ -318,6 +332,8 @@ This extension automates UI interactions on pump.fun. Use at your own risk. Not 
 
 ---
 
-*Made with rage and caffeine by [@daniel_wwf](https://x.com/daniel_wwf)*
+**Created by Daniel "CEO of the XRPL" Keller**  
+**Twitter/X: [@daniel_wwf](https://x.com/daniel_wwf)**  
+**License: MIT with Attribution (MUST credit author)**
 
 *For the culture. For the degens. Against the spammers. 🫡*
