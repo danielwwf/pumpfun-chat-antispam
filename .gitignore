@@ -1,0 +1,29 @@
+# Development files
+*.code-workspace
+.vscode/
+.idea/
+
+# AI/Assistant conversation files
+.thoughtprotocol_processed.json
+*.thoughtprotocol
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+
+# Build/test files
+node_modules/
+dist/
+build/
+*.zip
+
+# Personal/sensitive files
+.env
+.env.local
+config.local.js

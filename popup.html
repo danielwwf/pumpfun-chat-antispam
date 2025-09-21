@@ -1,0 +1,77 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>lolnuked StreamGuard</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="card">
+    <div class="row space">
+      <div class="title">lolnuked StreamGuard</div>
+      <label class="switch">
+        <input type="checkbox" id="enabled">
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="row" id="tab-status-row">
+      <div class="tab-status" id="tab-status">
+        <span id="tab-indicator">⚪</span>
+        <span id="tab-text">Checking tab status...</span>
+      </div>
+      <button id="force-activate" class="force-btn" style="display: none;">Activate This Tab</button>
+    </div>
+
+    <div class="row">
+      <label class="lbl">Action</label>
+      <select id="action">
+        <option value="highlight">Highlight only (safe)</option>
+        <option value="viewer_mode" selected>Viewer Mode (hide spam)</option>
+        <option value="delete_ui">Delete via UI</option>
+        <option value="ban_ui">Ban via UI</option>
+      </select>
+    </div>
+
+    <div class="row">
+      <label class="lbl">Step delay</label>
+      <select id="delay">
+        <option value="200">0.2s (fast)</option>
+        <option value="500">0.5s</option>
+        <option value="1000">1s</option>
+        <option value="1500">1.5s</option>
+        <option value="2000" selected>2s</option>
+      </select>
+    </div>
+
+    <div class="row">
+      <label class="lbl">Ban reason</label>
+      <select id="reason">
+        <option value="Spam" selected>Spam</option>
+        <option value="Toxic">Toxic</option>
+      </select>
+    </div>
+
+    <div class="row">
+      <button id="manage-triggers" class="manage-btn">Manage Trigger Words</button>
+    </div>
+
+    <details class="about">
+      <summary>About</summary>
+      <div class="about-body">
+        <strong>lolnuked StreamGuard</strong>, made by Daniel with rage<br>
+        <a class="link" href="https://x.com/daniel_wwf" target="_blank" rel="noreferrer noopener">
+          https://x.com/daniel_wwf
+        </a>
+        <p>If you find this helpful buy some nuke,<br>
+        <span class="mono">ca:</span><br>
+        <span class="mono">CVS4NMq2AVSJEzi9ui8TCm3QrCTfDtRmKZh6cSdnpump</span><br>
+        or send SOL to:<br>
+        <span class="mono">HUNAHhNnDviL4bwFHryzgXvspH5NVRGYrnqLHjbgwWnu</span></p>
+      </div>
+    </details>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

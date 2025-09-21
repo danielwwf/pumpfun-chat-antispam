@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "lolnuked StreamGuard",
+  "version": "1.4.0",
+  "description": "Ultimate spam protection for pump.fun streams - auto-delete/ban spam with custom triggers.",
+  "icons": {
+    "128": "icon128.png"
+  },
+  "permissions": ["storage"],
+  "host_permissions": [
+    "*://pump.fun/*",
+    "*://*.pump.fun/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["*://pump.fun/*", "*://*.pump.fun/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "lolnuked StreamGuard"
+  }
+}
