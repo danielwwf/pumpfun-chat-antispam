@@ -230,7 +230,6 @@ If you're paranoid (and you should be in crypto):
 - **Phrases**: `scam alert`, `obvious rug`
 - **Username patterns**: `@fudders`, `@scammers`
 - **Wildcard patterns**: `full*bundled*dont*buy` (catches any spacing/chars between words)
-- **Exact phrases**: `exact:full bundled dont buy` (matches only exact phrase)
 - **Regex patterns**: `@*rug*` (catches @fightrugs, @stoprugs, etc.)
 
 ### **💡 Pro Tips:**
