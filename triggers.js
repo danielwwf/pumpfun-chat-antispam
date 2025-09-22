@@ -61,7 +61,14 @@ function saveTriggers() {
       
       // Notify content script that triggers changed
       chrome.tabs?.query({active: true, currentWindow: true}, (tabs) => {
-        chrome.tabs?.sendMessage(tabs[0].id, {action: "triggersUpdated"});
+        if (tabs && tabs[0]) {
+          chrome.tabs?.sendMessage(tabs[0].id, {action: "triggersUpdated"}, () => {
+            // Ignore any connection errors - content script might not be loaded
+            if (chrome.runtime.lastError) {
+              // Silently ignore - triggers will be loaded when content script starts
+            }
+          });
+        }
       });
     }
   });

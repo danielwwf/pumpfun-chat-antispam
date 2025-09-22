@@ -108,3 +108,9 @@ input:checked + .slider:before { transform: translateX(18px); }
   background: var(--border);
   border-color: var(--accent);
 }
+
+.info-text {
+  color: var(--muted);
+  font-style: italic;
+  font-size: 12px;
+}

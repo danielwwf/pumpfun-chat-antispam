@@ -33,15 +33,21 @@
       </select>
     </div>
 
-    <div class="row">
+    <div class="row" id="delay-row">
       <label class="lbl">Step delay</label>
       <select id="delay">
-        <option value="200">0.2s (fast)</option>
+        <option value="0">No Delay (Instant)</option>
+        <option value="200" selected>0.2s (fast)</option>
         <option value="500">0.5s</option>
         <option value="1000">1s</option>
         <option value="1500">1.5s</option>
-        <option value="2000" selected>2s</option>
+        <option value="2000">2s</option>
       </select>
+    </div>
+
+    <div class="row" id="delay-message" style="display: none;">
+      <label class="lbl">Step delay</label>
+      <span class="info-text">No delay options (instant hiding)</span>
     </div>
 
     <div class="row">
@@ -59,7 +65,8 @@
     <details class="about">
       <summary>About</summary>
       <div class="about-body">
-        <strong>lolnuked StreamGuard</strong>, made by Daniel with rage<br>
+        <strong>lolnuked StreamGuard</strong> v0.0.027<br>
+        Made by Daniel with rage<br>
         <a class="link" href="https://x.com/daniel_wwf" target="_blank" rel="noreferrer noopener">
           https://x.com/daniel_wwf
         </a>

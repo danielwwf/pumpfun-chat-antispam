@@ -40,7 +40,9 @@
   let pendingMessages = new Set();
   let batchTimeout = null;
   const BATCH_DELAY = 1000; // Wait 1 second to collect messages before processing
-  const MAX_BATCH_SIZE = 10; // Process max 10 messages at once
+  const MAX_BATCH_SIZE = 50; // Increased based on bundle analysis - handle massive spam floods
+  
+  let blockedCount = 0;
   
   // Periodic scanning to catch missed messages
   let periodicScanInterval = null;
@@ -111,26 +113,35 @@
     
     if (pendingMessages.size === 0 || isProcessing) return;
     
-    const messages = Array.from(pendingMessages);
-    pendingMessages.clear();
+    // OPTIMIZED: Process in chunks for massive spam floods
+    const allMessages = Array.from(pendingMessages);
+    const chunkSize = MAX_BATCH_SIZE; // 50 messages per chunk
     
-    log(`processing batch of ${messages.length} messages`);
+    // Take first chunk, leave rest for next batch
+    const messages = allMessages.slice(0, chunkSize);
+    pendingMessages = new Set(allMessages.slice(chunkSize));
+    
+    log(`⚡ processing ${messages.length} of ${allMessages.length} messages`);
     
     if (ACTION === "highlight") {
-      // Highlight all at once (fast)
+      // Highlight all at once (instant)
       messages.forEach(bubble => {
         if (isMatch(bubble.innerText || "")) {
           markHighlighted(bubble);
         }
       });
-      log(`highlighted ${messages.length} messages`);
       return;
     }
     
     // Viewer mode should never reach here (processed immediately in addToBatch)
     
-    // For delete/ban operations, process one by one with lock
+    // For delete/ban operations, process with optimized methods
     await processMessagesSequentially(messages);
+    
+    // If more messages pending, schedule next batch IMMEDIATELY
+    if (pendingMessages.size > 0) {
+      setTimeout(processBatch, 50); // Process next chunk FAST
+    }
   }
 
   async function processMessagesSequentially(messages) {
@@ -161,7 +172,11 @@
         } else if (ACTION === "ban_ui") {
           const ok = await banViaUI(bubble);
           log(`ban operation ${ok ? 'succeeded' : 'failed'}`);
-          if (ok) updateActivityTime(); // Update activity on successful operation
+          if (ok) {
+            updateActivityTime(); // Update activity on successful operation
+            blockedCount++; // Track successful bans
+            chrome.storage?.local?.set({ pfamBlockedCount: blockedCount });
+          }
           
           // If ban fails, fallback to delete to at least remove the message
           if (!ok) {
@@ -566,7 +581,7 @@
     );
   }
 
-  // Matcher: checks custom triggers + legacy hardcoded patterns
+  // Matcher: checks custom triggers only
   function isMatch(text) {
     const t = normalizeKeepAt(text);
     if (!t) return false;
@@ -638,10 +653,10 @@
     
     // Fallback to hardcoded patterns if no custom triggers
     if (CUSTOM_TRIGGERS.length === 0) {
-      if (t.includes("stoprugs")) return true;
+    if (t.includes("stoprugs")) return true;
       if (t.includes("solspoint")) return true;
-      // @ followed by any non-space chars with "rug" somewhere in the token
-      return /@\S*rug\S*/i.test(t);
+    // @ followed by any non-space chars with "rug" somewhere in the token
+    return /@\S*rug\S*/i.test(t);
     }
     
     return false;
@@ -675,18 +690,39 @@
   }
 
   function getKebabButton(bubble) {
-    // Look for the kebab menu button - should have aria-label="Moderation actions"
+    // Enhanced selectors based on pump.fun bundle analysis
     const selectors = [
       'button[aria-label="Moderation actions"]',
+      'button[data-testid*="moderation"]', // From bundle analysis
+      'button[data-testid*="ban"]', // Test ID patterns
+      'button[role="button"][aria-label*="Ban"]', // More specific
       'button[aria-haspopup="menu"]',
       'button[aria-label*="Moderation"]',
-      'button[title*="Moderation"]'
+      'button[title*="Moderation"]',
+      'button[data-state]', // State-based selector from bundle
+      'button:has(svg)' // SVG fallback
     ];
     
     for (const selector of selectors) {
       const btn = bubble.querySelector(selector);
       if (btn && isVisible(btn)) {
         log(`found kebab button with selector: ${selector}`);
+        return btn;
+      }
+    }
+    
+    // Enhanced fallback based on bundle patterns
+    const buttons = bubble.querySelectorAll('button');
+    for (const btn of buttons) {
+      // Check for data attributes that suggest moderation
+      if (btn.dataset.testid && (btn.dataset.testid.includes('moderation') || btn.dataset.testid.includes('ban'))) {
+        log("found kebab button via data-testid");
+        return btn;
+      }
+      
+      // Check for state attributes (from bundle)
+      if (btn.dataset.state && isVisible(btn)) {
+        log("found kebab button via data-state");
         return btn;
       }
     }
@@ -737,8 +773,8 @@
     
     for (const selector of menuSelectors) {
       const candidates = document.querySelectorAll(selector);
-      for (const el of candidates) {
-        if (!isVisible(el)) continue;
+    for (const el of candidates) {
+      if (!isVisible(el)) continue;
         
         // Try multiple text extraction methods
         const texts = [
@@ -768,26 +804,63 @@
     return null;
   }
 
+  // OPTIMIZED: Fast delete - no searching!
   async function deleteViaUI(bubble) {
     const kebab = getKebabButton(bubble);
-    if (!kebab) { log("delete: kebab not found"); return false; }
+    if (!kebab) return false;
+    
     await clickEl(kebab);
-    await sleep(DELAY_MS);
-
-    // "Delete message"
-    let del = null;
-    for (let i = 0; i < 10 && !del; i++) {
-      del = findMenuItemByText("delete message");
-      if (!del) await sleep(150);
-    }
-    if (!del) { log("delete: menu item not found"); return false; }
-
-    await clickEl(del);
-    await sleep(300); // safety
+    await sleep(50); // Minimal delay
+    
+    // Click "Delete message" DIRECTLY - no loops!
+    const deleteEl = Array.from(document.querySelectorAll('[role="menuitem"], div[data-radix-collection-item]'))
+      .find(el => {
+        const text = (el.innerText || el.textContent || '').trim().toLowerCase();
+        return text === 'delete message';
+      });
+    
+    if (!deleteEl) return false;
+    
+    await clickEl(deleteEl);
     return true;
   }
 
-  async function banViaUI(bubble) {
+  // Fast direct ban method - tries to skip submenu navigation
+  // OPTIMIZED: Faster UI ban - skip searching!
+  async function banViaDirect(bubble) {
+    const kebab = getKebabButton(bubble);
+    if (!kebab) return false;
+    
+    await clickEl(kebab);
+    await sleep(100); // Minimal delay
+    
+    // Click "Ban user" DIRECTLY - no searching!
+    const banUserEl = Array.from(document.querySelectorAll('[role="menuitem"], div[data-radix-collection-item]'))
+      .find(el => {
+        const text = (el.innerText || el.textContent || '').trim().toLowerCase();
+        return text === 'ban user';
+      });
+    
+    if (!banUserEl) return false;
+    
+    await clickEl(banUserEl);
+    await sleep(100); // Minimal delay for submenu
+    
+    // Click "Spam" DIRECTLY - no searching!
+    const spamEl = Array.from(document.querySelectorAll('[role="menuitem"], div[data-radix-collection-item]'))
+      .find(el => {
+        const text = (el.innerText || el.textContent || '').trim().toLowerCase();
+        return text === 'spam';
+      });
+    
+    if (!spamEl) return false;
+    
+    await clickEl(spamEl);
+    return true;
+  }
+
+  // Legacy ban method (current implementation)  
+  async function banViaUILegacy(bubble) {
     const kebab = getKebabButton(bubble);
     if (!kebab) { log("ban: kebab not found"); return false; }
     await clickEl(kebab);
@@ -859,6 +932,346 @@
     await clickEl(reason);
     await sleep(500); // Extra time for ban to process
     return true;
+  }
+
+  // HTTP API ban method - inspired by pumphelper approach
+  // OPTIMIZED: Direct API ban - NO UI CLICKS!
+  async function banViaHTTPAPI(bubble) {
+    try {
+      // Fast extraction - no unnecessary checks
+      const messageId = bubble.dataset.messageId || extractMessageId(bubble);
+      const userAddress = extractUserAddress(bubble);
+      const roomId = window.location.pathname.split('/').pop();
+      
+      if (!messageId || !userAddress || !roomId) {
+        return false; // Skip logging for speed
+      }
+      
+      // Get token FAST (optimized function)
+      const token = extractJWTToken();
+      if (!token) return false;
+      
+      // INSTANT API call - no delays!
+      const response = await fetch(`https://pump.fun/api/chat/${roomId}/ban`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'auth-token': token,
+          'Content-Type': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest'
+        },
+        body: JSON.stringify({
+          messageId,
+          userAddress,
+          reason: 'Spam' // ALWAYS SPAM - NO SEARCHING!
+        }),
+        credentials: 'include'
+      });
+      
+      if (response.ok) {
+        log("⚡ INSTANT BAN via API!");
+        return true;
+      }
+      
+      return false;
+    } catch (error) {
+      return false; // No logging for speed
+    }
+  }
+  
+  // Extract message ID from bubble
+  function extractMessageId(bubble) {
+    // Try data-message-id attribute first
+    const messageId = bubble.dataset.messageId;
+    if (messageId) {
+      log(`✅ Found message ID in data attribute: ${messageId}`);
+      return messageId;
+    }
+    
+    // Try to find in bubble's HTML
+    const html = bubble.innerHTML;
+    const idMatch = html.match(/"id":\s*"([a-f0-9-]{36})"/);
+    if (idMatch && idMatch[1]) {
+      log(`✅ Found message ID in HTML: ${idMatch[1]}`);
+      return idMatch[1];
+    }
+    
+    return null;
+  }
+  
+  // OPTIMIZED: Get auth token directly (no searching!)
+  function extractJWTToken() {
+    // Get auth_token DIRECTLY from cookies (we know it exists!)
+    const authToken = document.cookie
+      .split('; ')
+      .find(row => row.startsWith('auth_token='))
+      ?.split('=')[1];
+    
+    if (authToken) {
+      log(`✅ Got auth_token directly!`);
+      return authToken;
+    }
+    
+    // Fallback to privy-id-token if needed
+    const privyToken = document.cookie
+      .split('; ')
+      .find(row => row.startsWith('privy-id-token='))
+      ?.split('=')[1];
+    
+    if (privyToken) {
+      log(`✅ Got privy-id-token as fallback`);
+      return privyToken;
+    }
+    
+    return null;
+  }
+  
+  // Inject WebSocket hijacker into pump.fun's page context
+  function injectWebSocketHijacker() {
+    try {
+      if (window.pfamBanUser) {
+        log("✅ WebSocket hijacker already injected");
+    return true;
+  }
+
+      const script = document.createElement('script');
+      script.textContent = `
+        (function() {
+          // Find pump.fun's WebSocket connection
+          const findSocket = () => {
+            const candidates = [
+              window._socket,
+              window.socket, 
+              window.io?.socket,
+              window.ws,
+              window.websocket
+            ];
+            
+            for (const candidate of candidates) {
+              if (candidate && candidate.readyState === 1) { // WebSocket.OPEN = 1
+                return candidate;
+              }
+            }
+            
+            // Search in global objects
+            for (const key of Object.keys(window)) {
+              try {
+                const obj = window[key];
+                if (obj && typeof obj.send === 'function' && obj.readyState === 1) {
+                  return obj;
+                }
+              } catch (e) {
+                continue;
+              }
+            }
+            return null;
+          };
+          
+          const socket = findSocket();
+          if (socket) {
+            // Create ban function in pump.fun's context
+            window.pfamBanUser = function(userAddress, reason, roomId) {
+              try {
+                const banCommand = ["banUserInRoom", {
+                  roomId: roomId,
+                  userAddress: userAddress, 
+                  reason: reason
+                }];
+                const message = '42' + JSON.stringify(banCommand);
+                socket.send(message);
+                console.log('PFAM: Sent WebSocket ban command', banCommand);
+                return true;
+              } catch (e) {
+                console.error('PFAM: WebSocket ban failed', e);
+                return false;
+              }
+            };
+            
+            // Also create delete function
+            window.pfamDeleteMessage = function(messageId, roomId) {
+              try {
+                const deleteCommand = ["deleteMessage", {roomId, messageId}];
+                const message = '42' + JSON.stringify(deleteCommand);
+                socket.send(message);
+                console.log('PFAM: Sent WebSocket delete command', deleteCommand);
+                return true;
+              } catch (e) {
+                console.error('PFAM: WebSocket delete failed', e);
+                return false;
+              }
+            };
+            
+            console.log('PFAM: WebSocket hijacker successfully injected!');
+          } else {
+            console.warn('PFAM: No WebSocket found for hijacking');
+          }
+        })();
+      `;
+      
+      document.head.appendChild(script);
+      script.remove();
+      
+      log("🚀 WebSocket hijacker script injected into page context");
+      return true;
+    } catch (error) {
+      log("❌ Failed to inject WebSocket hijacker:", error);
+      return false;
+    }
+  }
+  
+  // Extract user address from message bubble
+  function extractUserAddress(bubble) {
+    // Try multiple methods to get user address
+    
+    // Method 1: Look for data attributes
+    const userAddr = bubble.dataset.userAddress || bubble.dataset.address;
+    if (userAddr) {
+      log(`✅ Found user address in data attributes: ${userAddr}`);
+      return userAddr;
+    }
+    
+    // Method 2: Look for links or elements with address-like content
+    const links = bubble.querySelectorAll('a[href*="/"], span, div');
+    for (const link of links) {
+      const href = link.href || link.textContent || '';
+      const addressMatch = href.match(/([A-Za-z0-9]{32,50})/);
+      if (addressMatch && addressMatch[1].length >= 32) {
+        log(`✅ Found user address in link/text: ${addressMatch[1]}`);
+        return addressMatch[1];
+      }
+    }
+    
+    // Method 3: Look in bubble's HTML for address patterns
+    const html = bubble.innerHTML;
+    const addressMatch = html.match(/([A-Za-z0-9]{32,50})/g);
+    if (addressMatch) {
+      for (const addr of addressMatch) {
+        if (addr.length >= 32 && addr.length <= 50) {
+          log(`✅ Found user address in HTML: ${addr}`);
+          return addr;
+        }
+      }
+    }
+    
+    return null;
+  }
+  
+  // Extract room ID dynamically
+  function extractRoomId() {
+    // Method 1: From URL
+    const urlMatch = window.location.href.match(/\/([A-Za-z0-9]{32,50})/);
+    if (urlMatch && urlMatch[1]) {
+      log(`✅ Found room ID in URL: ${urlMatch[1]}`);
+      return urlMatch[1];
+    }
+    
+    // Method 2: From page data attributes
+    const roomElements = document.querySelectorAll('[data-room-id], [data-roomid]');
+    for (const el of roomElements) {
+      const roomId = el.dataset.roomId || el.dataset.roomid;
+      if (roomId) {
+        log(`✅ Found room ID in data attributes: ${roomId}`);
+        return roomId;
+      }
+    }
+    
+    // Method 3: From meta tags or scripts
+    const scripts = document.querySelectorAll('script');
+    for (const script of scripts) {
+      const content = script.textContent || '';
+      const roomMatch = content.match(/"roomId":\s*"([A-Za-z0-9]{32,50})"/);
+      if (roomMatch && roomMatch[1]) {
+        log(`✅ Found room ID in script: ${roomMatch[1]}`);
+        return roomMatch[1];
+      }
+    }
+    
+    return null;
+  }
+
+  // React discovery - find out what's actually available
+  function discoverReactStructure(bubble) {
+    try {
+      log("🔍 DISCOVERING React structure...");
+      
+      // Check React fiber
+      const fiber = bubble._reactInternalInstance || bubble.__reactInternalInstance || bubble._reactInternals;
+      if (fiber) {
+        log("✅ Found React fiber on bubble");
+        
+        // Analyze the fiber structure
+        let current = fiber;
+        let depth = 0;
+        while (current && depth < 10) {
+          if (current.memoizedProps) {
+            const props = current.memoizedProps;
+            const propNames = Object.keys(props).filter(key => typeof props[key] === 'function');
+            if (propNames.length > 0) {
+              log(`📋 React props (depth ${depth}): ${propNames.join(', ')}`);
+            }
+          }
+          current = current.return;
+          depth++;
+        }
+      }
+      
+      // Check global window functions
+      const windowFunctions = Object.keys(window).filter(key => {
+        try {
+          return typeof window[key] === 'function' && (
+            key.toLowerCase().includes('ban') || 
+            key.toLowerCase().includes('delete') || 
+            key.toLowerCase().includes('moderate')
+          );
+        } catch (e) {
+          return false;
+        }
+      });
+      
+      if (windowFunctions.length > 0) {
+        log(`📋 Global functions: ${windowFunctions.join(', ')}`);
+      }
+      
+      // Check if React DevTools is available
+      if (window.__REACT_DEVTOOLS_GLOBAL_HOOK__) {
+        log("✅ React DevTools detected");
+        const hook = window.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+        if (hook.getFiberRoots) {
+          log("📋 React DevTools has getFiberRoots");
+        }
+      }
+      
+      // Check bubble's direct properties
+      const bubbleProps = Object.keys(bubble).filter(key => key.startsWith('_react') || key.startsWith('__react'));
+      if (bubbleProps.length > 0) {
+        log(`📋 Bubble React props: ${bubbleProps.join(', ')}`);
+      }
+      
+      return false; // Discovery only, don't actually ban
+      
+    } catch (error) {
+      log("❌ React discovery error:", error);
+      return false;
+    }
+  }
+
+  // OPTIMIZED: Main ban function - tries fastest methods first
+  async function banViaUI(bubble) {
+    // Try HTTP API first (fastest - ~50ms)
+    if (await banViaHTTPAPI(bubble)) {
+      log("⚡ HTTP API ban succeeded");
+      return true;
+    }
+    
+    // Fallback to optimized UI method (~300ms)
+    if (await banViaDirect(bubble)) {
+      log("✅ Direct UI ban succeeded");
+      return true;
+    }
+    
+    // If both fail, try legacy as last resort
+    log("⚠️ Fast methods failed, trying legacy");
+    return await banViaUILegacy(bubble);
   }
 
   async function handleBubble(bubble) {
@@ -1079,6 +1492,7 @@
     
     // For other modes, start full systems
     log("🛡️ MODERATOR MODE: Starting full systems");
+    
     checkTabStatus();
     scanRoot(document);
     installObserver(document);
