@@ -526,6 +526,14 @@
         log("no non-spam messages found - keeping previous reference");
       }
     }
+    
+    // CRITICAL: If current lastKnownMessage is now spam, invalidate it!
+    if (lastKnownMessage && isMatch(lastKnownMessage.text)) {
+      log(`🚨 INVALIDATING last known message - it's now a trigger: "${lastKnownMessage.text}..."`);
+      lastKnownMessage = null;
+      // Re-run to find a new non-spam reference
+      updateLastKnownMessage();
+    }
   }
 
   function checkChatHealth() {
@@ -804,8 +812,58 @@
     return null;
   }
 
-  // OPTIMIZED: Fast delete - no searching!
+  // Use SAME API as ban - server determines action based on role!
+  async function deleteViaAPI(bubble) {
+    try {
+      // Extract user address (same as ban API)
+      const userLink = bubble.querySelector('a[href*="/profile/"]');
+      if (!userLink) return false;
+      
+      const userAddress = userLink.href.split("/profile/")[1];
+      if (!userAddress) return false;
+
+      // Extract room ID from URL
+      const roomId = window.location.pathname.split('/').pop();
+      if (!roomId) return false;
+
+      // Use SAME endpoint as ban - server will delete for mods, ban for creators!
+      const MODERATION_ENDPOINT = `https://livechat.pump.fun/chat/moderation/rooms/${roomId}/bans`;
+      
+      const response = await fetch(MODERATION_ENDPOINT, {
+        method: "POST",
+        headers: {
+          "accept": "*/*",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          userAddress: userAddress,
+          reason: "SPAM"
+        }),
+        credentials: "include"
+      });
+
+      if (response.status === 204 || response.ok) {
+        log(`⚡ INSTANT DELETE via API (same endpoint as ban!): ${userAddress}`);
+        return true;
+      }
+
+      return false;
+    } catch {
+      return false; // Silent fail, try UI method
+    }
+  }
+
+  // OPTIMIZED: Fast delete - API first, UI fallback
   async function deleteViaUI(bubble) {
+    // Try API first
+    log(`🔥 Attempting API delete first...`);
+    if (await deleteViaAPI(bubble)) {
+      log(`✅ API delete succeeded - no UI needed!`);
+      return true;
+    }
+    
+    // Fallback to UI clicking if API fails
+    log(`⚠️ API delete failed - falling back to UI method`);
     const kebab = getKebabButton(bubble);
     if (!kebab) return false;
     

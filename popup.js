@@ -11,13 +11,11 @@
 const K_ENABLED = "pfam_enabled";
 const K_ACTION  = "pfam_action";       // "highlight" | "delete_ui" | "ban_ui"
 const K_DELAY   = "pfam_delay_ms";
-const K_REASON  = "pfam_ban_reason";
 
 const defaults = {
   [K_ENABLED]: true,
   [K_ACTION]: "viewer_mode",
-  [K_DELAY]: 200,  // 0.2 seconds default for ban/delete modes
-  [K_REASON]: "Spam"
+  [K_DELAY]: 200  // 0.2 seconds default for ban/delete modes
 };
 
 const $ = sel => document.querySelector(sel);
@@ -27,7 +25,6 @@ function load() {
     $("#enabled").checked = !!res[K_ENABLED];
     $("#action").value    = res[K_ACTION];
     $("#delay").value     = String(res[K_DELAY]);
-    $("#reason").value    = res[K_REASON];
     
     // Set delay visibility based on the LOADED action value (not HTML default)
     updateDelayVisibility(res[K_ACTION]);
@@ -50,9 +47,6 @@ function bind() {
   $("#delay").addEventListener("change", e => {
     chrome.storage.sync.set({ [K_DELAY]: Number(e.target.value) });
   });
-  $("#reason").addEventListener("change", e => {
-    chrome.storage.sync.set({ [K_REASON]: e.target.value });
-  });
   
   // Force activate button
   $("#force-activate").addEventListener("click", () => {
@@ -73,12 +67,30 @@ function bind() {
   });
   
   // Manage triggers button
-  $("#manage-triggers").addEventListener("click", () => {
+  const triggerBtn = $("#manage-triggers");
+  console.log("DEBUG: Trigger button element:", triggerBtn);
+  
+  if (!triggerBtn) {
+    console.error("ERROR: Trigger button not found!");
+    return;
+  }
+  
+  triggerBtn.addEventListener("click", (e) => {
+    console.log("DEBUG: Trigger button clicked!");
+    e.preventDefault();
+    
+    console.log("DEBUG: Attempting to create window...");
     chrome.windows?.create({
       url: "triggers.html",
       type: "popup",
       width: 450,
       height: 500
+    }, (window) => {
+      if (chrome.runtime.lastError) {
+        console.error("ERROR: Window creation failed:", chrome.runtime.lastError);
+      } else {
+        console.log("SUCCESS: Window created:", window);
+      }
     });
   });
 }
@@ -140,5 +152,12 @@ function updateDelayVisibility(actionMode) {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
-  load(); bind();
+  console.log("DEBUG: Popup DOM loaded");
+  
+  // Check if trigger button exists at load time
+  const triggerBtnAtLoad = document.getElementById("manage-triggers");
+  console.log("DEBUG: Trigger button at load:", triggerBtnAtLoad);
+  
+  load(); 
+  bind();
 });
