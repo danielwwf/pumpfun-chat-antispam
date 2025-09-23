@@ -15,21 +15,15 @@
   // -------- storage keys & defaults --------
   const K_ENABLED = "pfam_enabled";
   const K_ACTION = "pfam_action";          // "highlight" | "viewer_mode" | "delete_ui" | "ban_ui"
-  const K_DELAY  = "pfam_delay_ms";        // number (ms)
-  const K_REASON = "pfam_ban_reason";      // "Spam" | "Toxic"
   const K_CUSTOM_TRIGGERS = "pfam_custom_triggers"; // Custom trigger words
 
   const DEFAULTS = {
     [K_ENABLED]: true,
-    [K_ACTION]: "viewer_mode",
-    [K_DELAY]: 2000,
-    [K_REASON]: "Spam"
+    [K_ACTION]: "viewer_mode"
   };
 
   let ENABLED  = DEFAULTS[K_ENABLED];
   let ACTION   = DEFAULTS[K_ACTION];
-  let DELAY_MS = DEFAULTS[K_DELAY];
-  let REASON   = DEFAULTS[K_REASON];
   let CUSTOM_TRIGGERS = []; // Array of custom trigger words
 
   // Global processing lock to prevent concurrent UI operations
@@ -64,7 +58,6 @@
   let lastActivityTime = Date.now();
   let selfHealingInterval = null;
   const SELF_HEALING_CHECK_DELAY = 15000; // Check every 15 seconds for stuck messages
-  const STUCK_MESSAGE_TIMEOUT = 60000; // Consider message stuck after 60 seconds
   const ACTIVITY_TIMEOUT = 30000; // No activity for 30 seconds = potential stuck state
 
   // -------- helpers --------
@@ -180,7 +173,7 @@
             bubble.dataset.pfamProcessed = "1";
           }
         } else if (ACTION === "ban_ui") {
-          // CREATOR MODE: BAN VIA API ONLY - NO UI FALLBACK
+          // CREATOR MODE: BAN VIA API ONLY
           const success = await banViaAPI(bubble);
           if (success) {
             log(`✅ API BAN SUCCESS - message removed from DOM`);
@@ -201,8 +194,7 @@
           }
         }
         
-        // Small delay between operations (reduced for speed)
-        await sleep(50);
+        // Operations are fast enough without delay
         
       } catch (error) {
         log("batch operation error:", error);
@@ -666,13 +658,7 @@
     bubble.style.display = "none";
     
     // No logging in production to minimize any potential activity
-    // log(`hidden spam bubble from view`);
   }
-
-
-
-
-
 
   // Use SAME API as ban - server determines action based on role!
   async function deleteViaAPI(bubble) {
@@ -706,18 +692,18 @@
 
       if (response.status === 204 || response.ok) {
         log(`⚡ INSTANT DELETE via API (same endpoint as ban!): ${userAddress}`);
-        
-        // CRITICAL: Remove from DOM immediately after successful API delete!
-        // This prevents it from being picked up as a reference
-        bubble.remove();
-        log(`🗑️ Removed message from DOM after API delete`);
-        
+        // DO NOT REMOVE FROM DOM - Let server update handle it
+        // Mark as processed to avoid re-processing
+        bubble.dataset.pfamProcessed = "1";
         return true;
+      } else {
+        log(`❌ DELETE API FAILED - Status: ${response.status}`);
       }
 
       return false;
-    } catch {
-      return false; // Silent fail, try UI method
+    } catch (error) {
+      log(`❌ DELETE API ERROR:`, error);
+      return false;
     }
   }
 
@@ -758,26 +744,21 @@
       if (response.status === 204 || response.ok) {
         log(`⚡ INSTANT BAN via API: ${userAddress}`);
         blockedCount++;
-        
-        // CRITICAL: Remove from DOM immediately after successful API ban!
-        // This prevents it from being picked up as a reference
-        bubble.remove();
-        log(`🗑️ Removed message from DOM after API ban`);
-        
+        // DO NOT REMOVE FROM DOM - Let server update handle it
+        // Mark as processed to avoid re-processing
+        bubble.dataset.pfamProcessed = "1";
         return true;
+      } else {
+        log(`❌ BAN API FAILED - Status: ${response.status}`);
       }
       
       return false;
-    } catch {
-      return false; // Silent fail, try UI method
+    } catch (error) {
+      log(`❌ BAN API ERROR:`, error);
+      return false;
     }
   }
 
-  // BAN FUNCTION - API ONLY!
-  async function banViaUI(bubble) {
-    // API only - no UI fallback
-    return await banViaAPI(bubble);
-  }
 
   async function handleBubble(bubble) {
     if (!bubble || bubble.dataset.pfamProcessed || !ENABLED) return;
@@ -860,8 +841,6 @@
     chrome.storage?.sync.get(keysToLoad, (res) => {
       ENABLED  = !!res[K_ENABLED];
       ACTION   = res[K_ACTION] || DEFAULTS[K_ACTION];
-      DELAY_MS = +res[K_DELAY] || DEFAULTS[K_DELAY];
-      REASON   = res[K_REASON] || DEFAULTS[K_REASON];
       
       // Load custom triggers
       loadCustomTriggers(res[K_CUSTOM_TRIGGERS]);
@@ -950,8 +929,6 @@
       }
     }
     
-    if (K_DELAY   in changes) DELAY_MS = +changes[K_DELAY].newValue || 2000;
-    if (K_REASON  in changes) REASON = changes[K_REASON].newValue || "Spam";
     if (K_CUSTOM_TRIGGERS in changes) {
       loadCustomTriggers(changes[K_CUSTOM_TRIGGERS].newValue);
       log("custom triggers updated - rescanning messages");
@@ -966,7 +943,7 @@
       });
     }
     
-    log(`settings updated: enabled=${ENABLED}, action=${ACTION}, delay=${DELAY_MS}, reason=${REASON}`);
+    log(`settings updated: enabled=${ENABLED}, action=${ACTION}`);
     
     // re-scan immediately when toggled, enabled, or action changed
     if (ENABLED && (K_ENABLED in changes || actionChanged)) {
@@ -984,7 +961,7 @@
       isActiveTab = false;
       return; 
     }
-    log(`active (action=${ACTION}, delay=${DELAY_MS}ms, reason=${REASON})`);
+    log(`active (action=${ACTION})`);
     
     // For viewer mode, only start minimal systems (no storage writes, no background tasks)
     if (ACTION === "viewer_mode") {
