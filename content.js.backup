@@ -1,4 +1,4 @@
-// lolnuked StreamGuard — content script (4 modes: highlight, viewer_mode, delete_ui, ban_ui)
+// Pumpfun Auto Mod — content script (3 actions only: highlight, delete via UI, ban via UI)
 /**
  * lolnuked StreamGuard - Spam Protection for pump.fun
  * 
@@ -14,7 +14,7 @@
 (() => {
   // -------- storage keys & defaults --------
   const K_ENABLED = "pfam_enabled";
-  const K_ACTION = "pfam_action";          // "highlight" | "viewer_mode" | "delete_ui" | "ban_ui"
+  const K_ACTION = "pfam_action";          // "highlight" | "delete_ui" | "ban_ui"
   const K_DELAY  = "pfam_delay_ms";        // number (ms)
   const K_REASON = "pfam_ban_reason";      // "Spam" | "Toxic"
   const K_CUSTOM_TRIGGERS = "pfam_custom_triggers"; // Custom trigger words
@@ -46,7 +46,7 @@
   
   // Periodic scanning to catch missed messages
   let periodicScanInterval = null;
-  const PERIODIC_SCAN_DELAY = 7000; // Scan every 7 seconds for missed messages
+  const PERIODIC_SCAN_DELAY = 5000; // Scan every 5 seconds for missed messages
   
   // Chat health monitoring
   let lastKnownMessage = null;
@@ -201,8 +201,8 @@
           }
         }
         
-        // Small delay between operations (reduced for speed)
-        await sleep(50);
+        // Small delay between operations
+        await sleep(200);
         
       } catch (error) {
         log("batch operation error:", error);
@@ -216,10 +216,49 @@
       }
     }
     
-    log("batch processing completed");
+    log("batch processing completed - checking for remaining messages");
     
     // Update last known message after processing
     updateLastKnownMessage();
+    
+    // After processing batch, check if there are still unprocessed messages
+    setTimeout(() => {
+      if (!isProcessing && ENABLED) {
+        // Get ALL message bubbles, not just unprocessed ones
+        const allMessages = document.querySelectorAll('div[data-message-id]');
+        const spamMessages = Array.from(allMessages).filter(bubble => {
+          // Skip if already processed
+          if (bubble.dataset.pfamProcessed) return false;
+          
+          const tx = bubble.innerText || "";
+          const isSpam = isMatch(tx);
+          
+          if (isSpam) {
+            log(`found unprocessed spam: "${tx.substring(0, 50)}..."`);
+          }
+          
+          return isSpam;
+        });
+        
+        if (spamMessages.length > 0) {
+          log(`found ${spamMessages.length} remaining spam messages - adding to new batch`);
+          spamMessages.forEach(bubble => addToBatch(bubble));
+        } else {
+          log("no remaining spam messages found - scanning complete");
+          
+          // Double check by logging what messages are visible
+          const allVisibleMessages = Array.from(allMessages).map(bubble => {
+            const tx = bubble.innerText || "";
+            const processed = bubble.dataset.pfamProcessed ? "✓" : "✗";
+            const spam = isMatch(tx) ? "SPAM" : "OK";
+            return `${processed} ${spam}: "${tx.substring(0, 30)}..."`;
+          });
+          
+          log(`visible messages summary (${allVisibleMessages.length} total):`);
+          allVisibleMessages.slice(-5).forEach(msg => log(`  ${msg}`)); // Show last 5
+        }
+      }
+    }, 1500); // Increased delay to let UI settle
   }
 
   function startPeriodicScanning() {
@@ -415,12 +454,6 @@
   }
 
   function triggerSelfHealing(stuckMessages) {
-    // Skip self-healing entirely in viewer mode
-    if (ACTION === "viewer_mode") {
-      log("⏭️ Skipping self-healing in viewer mode");
-      return;
-    }
-    
     log(`🔄 SELF-HEALING: Recovering ${stuckMessages.length} stuck messages`);
     
     // Clear processed flags and highlights from stuck messages
@@ -586,6 +619,12 @@
     const t = normalizeKeepAt(text);
     if (!t) return false;
     
+    // Skip logging in viewer mode to minimize any activity
+    if (ACTION !== "viewer_mode") {
+      log(`🔍 checking message: "${text.substring(0, 50)}" (normalized: "${t.substring(0, 50)}")`);
+      log(`🔍 against ${CUSTOM_TRIGGERS.length} triggers:`, CUSTOM_TRIGGERS);
+    }
+    
     // Check custom triggers first
     for (const trigger of CUSTOM_TRIGGERS) {
       if (!trigger) continue;
@@ -602,7 +641,14 @@
         const messageLettersOnly = extractLettersOnly(t);
         const triggerLettersOnly = extractLettersOnly(exactPhrase);
         
+        if (ACTION !== "viewer_mode") {
+          log(`checking exact match (letters only): "${exactPhrase}" → "${triggerLettersOnly}" vs message → "${messageLettersOnly}"`);
+        }
+        
         if (messageLettersOnly === triggerLettersOnly) {
+          if (ACTION !== "viewer_mode") {
+            log(`✅ exact phrase match (letters only): "${exactPhrase}"`);
+          }
           return true;
         }
         
@@ -622,7 +668,14 @@
         
         const regex = new RegExp(wildcardPattern, 'i');
         
+        if (ACTION !== "viewer_mode") {
+          log(`checking wildcard pattern: "${trigger}" → regex: /${wildcardPattern}/`);
+        }
+        
         if (regex.test(t)) {
+          if (ACTION !== "viewer_mode") {
+            log(`✅ matched wildcard pattern: "${trigger}"`);
+          }
           return true;
         }
       } else {
@@ -669,10 +722,120 @@
     // log(`hidden spam bubble from view`);
   }
 
+  function getKebabButton(bubble) {
+    // Enhanced selectors based on pump.fun bundle analysis
+    const selectors = [
+      'button[aria-label="Moderation actions"]',
+      'button[data-testid*="moderation"]', // From bundle analysis
+      'button[data-testid*="ban"]', // Test ID patterns
+      'button[role="button"][aria-label*="Ban"]', // More specific
+      'button[aria-haspopup="menu"]',
+      'button[aria-label*="Moderation"]',
+      'button[title*="Moderation"]',
+      'button[data-state]', // State-based selector from bundle
+      'button:has(svg)' // SVG fallback
+    ];
+    
+    for (const selector of selectors) {
+      const btn = bubble.querySelector(selector);
+      if (btn && isVisible(btn)) {
+        log(`found kebab button with selector: ${selector}`);
+        return btn;
+      }
+    }
+    
+    // Enhanced fallback based on bundle patterns
+    const buttons = bubble.querySelectorAll('button');
+    for (const btn of buttons) {
+      // Check for data attributes that suggest moderation
+      if (btn.dataset.testid && (btn.dataset.testid.includes('moderation') || btn.dataset.testid.includes('ban'))) {
+        log("found kebab button via data-testid");
+        return btn;
+      }
+      
+      // Check for state attributes (from bundle)
+      if (btn.dataset.state && isVisible(btn)) {
+        log("found kebab button via data-state");
+        return btn;
+      }
+    }
+    
+    log("kebab button not found with any selector");
+    return null;
+  }
 
+  function isVisible(el) {
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    return !!(r.width || r.height) && getComputedStyle(el).visibility !== "hidden";
+  }
 
+  async function clickEl(el) {
+    log(`clicking element: ${el.tagName} with text: "${el.innerText || el.textContent || 'no text'}"`);
+    el.dispatchEvent(new MouseEvent("pointerdown", {bubbles:true}));
+    el.dispatchEvent(new MouseEvent("mousedown", {bubbles:true}));
+    el.dispatchEvent(new MouseEvent("mouseup",   {bubbles:true}));
+    el.dispatchEvent(new MouseEvent("click",     {bubbles:true}));
+    await sleep(100); // small delay after click
+  }
 
+  function normLabel(el) {
+    return normalizeKeepAt(
+      el?.innerText || el?.textContent || el?.getAttribute("aria-label") || el?.title || ""
+    );
+  }
 
+  function findMenuItemByText(needle) {
+    const originalNeedle = needle;
+    needle = normalizeKeepAt(needle);
+    log(`searching for menu item: "${originalNeedle}" (normalized: "${needle}")`);
+    
+    // Try multiple selectors - start specific, then get more generic
+    const menuSelectors = [
+      '[role="menuitem"]',
+      '[role="option"]', 
+      'div[data-radix-collection-item]',
+      '[data-radix-dropdown-menu-item]',
+      'button[role="menuitem"]',
+      'div[role="menuitem"]',
+      // More generic fallbacks for stubborn menus
+      'button:not([aria-hidden="true"])',
+      'div:not([aria-hidden="true"])',
+      'span:not([aria-hidden="true"])'
+    ];
+    
+    for (const selector of menuSelectors) {
+      const candidates = document.querySelectorAll(selector);
+    for (const el of candidates) {
+      if (!isVisible(el)) continue;
+        
+        // Try multiple text extraction methods
+        const texts = [
+          el.innerText,
+          el.textContent,
+          el.getAttribute("aria-label"),
+          el.title,
+          el.getAttribute("data-label")
+        ].filter(Boolean);
+        
+        for (const text of texts) {
+          const normalized = normalizeKeepAt(text);
+          
+          // Try exact match and partial matches
+          if (normalized === needle || 
+              normalized.includes(needle) || 
+              needle.includes(normalized) ||
+              text.toLowerCase() === originalNeedle.toLowerCase()) {
+            log(`found menu item: "${text}" matches "${originalNeedle}"`);
+            return el;
+          }
+        }
+      }
+    }
+    
+    log(`menu item not found for: "${originalNeedle}"`);
+    return null;
+  }
 
   // Use SAME API as ban - server determines action based on role!
   async function deleteViaAPI(bubble) {
@@ -721,8 +884,144 @@
     }
   }
 
+  // OPTIMIZED: Fast delete - API first, UI fallback
+  async function deleteViaUI(bubble) {
+    // Try API first
+    log(`🔥 Attempting API delete first...`);
+    if (await deleteViaAPI(bubble)) {
+      log(`✅ API delete succeeded - no UI needed!`);
+      return true;
+    }
+    
+    // Fallback to UI clicking if API fails
+    log(`⚠️ API delete failed - falling back to UI method`);
+    const kebab = getKebabButton(bubble);
+    if (!kebab) return false;
+    
+    await clickEl(kebab);
+    await sleep(50); // Minimal delay
+    
+    // Click "Delete message" DIRECTLY - no loops!
+    const deleteEl = Array.from(document.querySelectorAll('[role="menuitem"], div[data-radix-collection-item]'))
+      .find(el => {
+        const text = (el.innerText || el.textContent || '').trim().toLowerCase();
+        return text === 'delete message';
+      });
+    
+    if (!deleteEl) return false;
+    
+    await clickEl(deleteEl);
+    return true;
+  }
 
+  // Fast direct ban method - tries to skip submenu navigation
+  // OPTIMIZED: Faster UI ban - skip searching!
+  async function banViaDirect(bubble) {
+    const kebab = getKebabButton(bubble);
+    if (!kebab) return false;
+    
+    await clickEl(kebab);
+    await sleep(100); // Minimal delay
+    
+    // Click "Ban user" DIRECTLY - no searching!
+    const banUserEl = Array.from(document.querySelectorAll('[role="menuitem"], div[data-radix-collection-item]'))
+      .find(el => {
+        const text = (el.innerText || el.textContent || '').trim().toLowerCase();
+        return text === 'ban user';
+      });
+    
+    if (!banUserEl) return false;
+    
+    await clickEl(banUserEl);
+    await sleep(100); // Minimal delay for submenu
+    
+    // Click "Spam" DIRECTLY - no searching!
+    const spamEl = Array.from(document.querySelectorAll('[role="menuitem"], div[data-radix-collection-item]'))
+      .find(el => {
+        const text = (el.innerText || el.textContent || '').trim().toLowerCase();
+        return text === 'spam';
+      });
+    
+    if (!spamEl) return false;
+    
+    await clickEl(spamEl);
+    return true;
+  }
 
+  // Legacy ban method (current implementation)  
+  async function banViaUILegacy(bubble) {
+    const kebab = getKebabButton(bubble);
+    if (!kebab) { log("ban: kebab not found"); return false; }
+    await clickEl(kebab);
+    await sleep(DELAY_MS);
+
+    // "Ban user" - try multiple variations and case sensitivity
+    let ban = null;
+    const banVariations = ["ban user", "Ban user", "BAN USER", "ban", "Ban"];
+    
+    for (let i = 0; i < 15 && !ban; i++) {
+      for (const variation of banVariations) {
+        ban = findMenuItemByText(variation);
+        if (ban) {
+          log(`found ban menu item with text: "${variation}"`);
+          break;
+        }
+      }
+      if (!ban) await sleep(200);
+    }
+    
+    if (!ban) { 
+      log("ban: 'Ban user' not found - trying to close menu");
+      // Click somewhere else to close the menu
+      document.body.click();
+      return false; 
+    }
+    
+    log("clicking ban user menu item to open submenu");
+    await clickEl(ban);
+    await sleep(DELAY_MS + 500); // Extra time for submenu to appear
+
+    // Wait for submenu and find reason ("Spam" or "Toxic") - try multiple variations
+    let reason = null;
+    const reasonVariations = [
+      REASON.toLowerCase(),
+      REASON,
+      REASON.toUpperCase(),
+      normalizeKeepAt(REASON)
+    ];
+    
+    log(`looking for ban reason variations: ${reasonVariations.join(', ')}`);
+    
+    for (let i = 0; i < 15 && !reason; i++) {
+      for (const variation of reasonVariations) {
+        reason = findMenuItemByText(variation);
+        if (reason) {
+          log(`found ban reason with variation: "${variation}"`);
+          break;
+        }
+      }
+      if (!reason) {
+        log(`ban reason not found, attempt ${i + 1}/15`);
+        await sleep(300);
+      }
+    }
+    
+    if (!reason) { 
+      log(`ban: reason "${REASON}" not found after submenu opened`);
+      
+      // Debug: show what menu items are actually available
+      const allMenuItems = document.querySelectorAll('[role="menuitem"], [role="option"], div[data-radix-collection-item]');
+      log(`available menu items: ${Array.from(allMenuItems).map(el => `"${el.innerText || el.textContent}"`).join(', ')}`);
+      
+      document.body.click(); // Close menu
+      return false; 
+    }
+    
+    log(`clicking ban reason: "${REASON}"`);
+    await clickEl(reason);
+    await sleep(500); // Extra time for ban to process
+    return true;
+  }
 
   // GENIUS API from free version - INSTANT BANS!
   async function banViaAPI(bubble) {
@@ -772,11 +1071,320 @@
       return false; // Silent fail, try UI method
     }
   }
+  
+  // Extract message ID from bubble
+  function extractMessageId(bubble) {
+    // Try data-message-id attribute first
+    const messageId = bubble.dataset.messageId;
+    if (messageId) {
+      log(`✅ Found message ID in data attribute: ${messageId}`);
+      return messageId;
+    }
+    
+    // Try to find in bubble's HTML
+    const html = bubble.innerHTML;
+    const idMatch = html.match(/"id":\s*"([a-f0-9-]{36})"/);
+    if (idMatch && idMatch[1]) {
+      log(`✅ Found message ID in HTML: ${idMatch[1]}`);
+      return idMatch[1];
+    }
+    
+    return null;
+  }
+  
+  // OPTIMIZED: Get auth token directly (no searching!)
+  function extractJWTToken() {
+    // Get auth_token DIRECTLY from cookies (we know it exists!)
+    const authToken = document.cookie
+      .split('; ')
+      .find(row => row.startsWith('auth_token='))
+      ?.split('=')[1];
+    
+    if (authToken) {
+      log(`✅ Got auth_token directly!`);
+      return authToken;
+    }
+    
+    // Fallback to privy-id-token if needed
+    const privyToken = document.cookie
+      .split('; ')
+      .find(row => row.startsWith('privy-id-token='))
+      ?.split('=')[1];
+    
+    if (privyToken) {
+      log(`✅ Got privy-id-token as fallback`);
+      return privyToken;
+    }
+    
+    return null;
+  }
+  
+  // Inject WebSocket hijacker into pump.fun's page context
+  function injectWebSocketHijacker() {
+    try {
+      if (window.pfamBanUser) {
+        log("✅ WebSocket hijacker already injected");
+    return true;
+  }
 
-  // BAN FUNCTION - API ONLY!
+      const script = document.createElement('script');
+      script.textContent = `
+        (function() {
+          // Find pump.fun's WebSocket connection
+          const findSocket = () => {
+            const candidates = [
+              window._socket,
+              window.socket, 
+              window.io?.socket,
+              window.ws,
+              window.websocket
+            ];
+            
+            for (const candidate of candidates) {
+              if (candidate && candidate.readyState === 1) { // WebSocket.OPEN = 1
+                return candidate;
+              }
+            }
+            
+            // Search in global objects
+            for (const key of Object.keys(window)) {
+              try {
+                const obj = window[key];
+                if (obj && typeof obj.send === 'function' && obj.readyState === 1) {
+                  return obj;
+                }
+              } catch (e) {
+                continue;
+              }
+            }
+            return null;
+          };
+          
+          const socket = findSocket();
+          if (socket) {
+            // Create ban function in pump.fun's context
+            window.pfamBanUser = function(userAddress, reason, roomId) {
+              try {
+                const banCommand = ["banUserInRoom", {
+                  roomId: roomId,
+                  userAddress: userAddress, 
+                  reason: reason
+                }];
+                const message = '42' + JSON.stringify(banCommand);
+                socket.send(message);
+                console.log('PFAM: Sent WebSocket ban command', banCommand);
+                return true;
+              } catch (e) {
+                console.error('PFAM: WebSocket ban failed', e);
+                return false;
+              }
+            };
+            
+            // Also create delete function
+            window.pfamDeleteMessage = function(messageId, roomId) {
+              try {
+                const deleteCommand = ["deleteMessage", {roomId, messageId}];
+                const message = '42' + JSON.stringify(deleteCommand);
+                socket.send(message);
+                console.log('PFAM: Sent WebSocket delete command', deleteCommand);
+                return true;
+              } catch (e) {
+                console.error('PFAM: WebSocket delete failed', e);
+                return false;
+              }
+            };
+            
+            console.log('PFAM: WebSocket hijacker successfully injected!');
+          } else {
+            console.warn('PFAM: No WebSocket found for hijacking');
+          }
+        })();
+      `;
+      
+      document.head.appendChild(script);
+      script.remove();
+      
+      log("🚀 WebSocket hijacker script injected into page context");
+      return true;
+    } catch (error) {
+      log("❌ Failed to inject WebSocket hijacker:", error);
+      return false;
+    }
+  }
+  
+  // Extract user address from message bubble
+  function extractUserAddress(bubble) {
+    // Try multiple methods to get user address
+    
+    // Method 1: Look for data attributes
+    const userAddr = bubble.dataset.userAddress || bubble.dataset.address;
+    if (userAddr) {
+      log(`✅ Found user address in data attributes: ${userAddr}`);
+      return userAddr;
+    }
+    
+    // Method 2: Look for links or elements with address-like content
+    const links = bubble.querySelectorAll('a[href*="/"], span, div');
+    for (const link of links) {
+      const href = link.href || link.textContent || '';
+      const addressMatch = href.match(/([A-Za-z0-9]{32,50})/);
+      if (addressMatch && addressMatch[1].length >= 32) {
+        log(`✅ Found user address in link/text: ${addressMatch[1]}`);
+        return addressMatch[1];
+      }
+    }
+    
+    // Method 3: Look in bubble's HTML for address patterns
+    const html = bubble.innerHTML;
+    const addressMatch = html.match(/([A-Za-z0-9]{32,50})/g);
+    if (addressMatch) {
+      for (const addr of addressMatch) {
+        if (addr.length >= 32 && addr.length <= 50) {
+          log(`✅ Found user address in HTML: ${addr}`);
+          return addr;
+        }
+      }
+    }
+    
+    return null;
+  }
+  
+  // Extract room ID dynamically
+  function extractRoomId() {
+    // Method 1: From URL
+    const urlMatch = window.location.href.match(/\/([A-Za-z0-9]{32,50})/);
+    if (urlMatch && urlMatch[1]) {
+      log(`✅ Found room ID in URL: ${urlMatch[1]}`);
+      return urlMatch[1];
+    }
+    
+    // Method 2: From page data attributes
+    const roomElements = document.querySelectorAll('[data-room-id], [data-roomid]');
+    for (const el of roomElements) {
+      const roomId = el.dataset.roomId || el.dataset.roomid;
+      if (roomId) {
+        log(`✅ Found room ID in data attributes: ${roomId}`);
+        return roomId;
+      }
+    }
+    
+    // Method 3: From meta tags or scripts
+    const scripts = document.querySelectorAll('script');
+    for (const script of scripts) {
+      const content = script.textContent || '';
+      const roomMatch = content.match(/"roomId":\s*"([A-Za-z0-9]{32,50})"/);
+      if (roomMatch && roomMatch[1]) {
+        log(`✅ Found room ID in script: ${roomMatch[1]}`);
+        return roomMatch[1];
+      }
+    }
+    
+    return null;
+  }
+
+  // React discovery - find out what's actually available
+  function discoverReactStructure(bubble) {
+    try {
+      log("🔍 DISCOVERING React structure...");
+      
+      // Check React fiber
+      const fiber = bubble._reactInternalInstance || bubble.__reactInternalInstance || bubble._reactInternals;
+      if (fiber) {
+        log("✅ Found React fiber on bubble");
+        
+        // Analyze the fiber structure
+        let current = fiber;
+        let depth = 0;
+        while (current && depth < 10) {
+          if (current.memoizedProps) {
+            const props = current.memoizedProps;
+            const propNames = Object.keys(props).filter(key => typeof props[key] === 'function');
+            if (propNames.length > 0) {
+              log(`📋 React props (depth ${depth}): ${propNames.join(', ')}`);
+            }
+          }
+          current = current.return;
+          depth++;
+        }
+      }
+      
+      // Check global window functions
+      const windowFunctions = Object.keys(window).filter(key => {
+        try {
+          return typeof window[key] === 'function' && (
+            key.toLowerCase().includes('ban') || 
+            key.toLowerCase().includes('delete') || 
+            key.toLowerCase().includes('moderate')
+          );
+        } catch (e) {
+          return false;
+        }
+      });
+      
+      if (windowFunctions.length > 0) {
+        log(`📋 Global functions: ${windowFunctions.join(', ')}`);
+      }
+      
+      // Check if React DevTools is available
+      if (window.__REACT_DEVTOOLS_GLOBAL_HOOK__) {
+        log("✅ React DevTools detected");
+        const hook = window.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+        if (hook.getFiberRoots) {
+          log("📋 React DevTools has getFiberRoots");
+        }
+      }
+      
+      // Check bubble's direct properties
+      const bubbleProps = Object.keys(bubble).filter(key => key.startsWith('_react') || key.startsWith('__react'));
+      if (bubbleProps.length > 0) {
+        log(`📋 Bubble React props: ${bubbleProps.join(', ')}`);
+      }
+      
+      return false; // Discovery only, don't actually ban
+      
+    } catch (error) {
+      log("❌ React discovery error:", error);
+      return false;
+    }
+  }
+
+  // MAIN BAN FUNCTION - API FIRST!
   async function banViaUI(bubble) {
-    // API only - no UI fallback
-    return await banViaAPI(bubble);
+    // Try API first (FASTEST - ~30ms!)
+    if (await banViaAPI(bubble)) return true;
+    
+    // Fallback to UI clicking if API fails
+    try {
+      const kebab = getKebabButton(bubble);
+      if (!kebab) return false;
+      
+      await clickEl(kebab);
+      await sleep(100);
+      
+      // Click "Ban user"
+      const banOption = Array.from(document.querySelectorAll('[role="menuitem"]'))
+        .find(el => el.textContent?.toLowerCase().includes('ban'));
+      
+      if (!banOption) return false;
+      
+      await clickEl(banOption);
+      await sleep(100);
+      
+      // Click "Spam" reason - ALWAYS SPAM!
+      const spamOption = Array.from(document.querySelectorAll('[role="menuitem"]'))
+        .find(el => el.textContent?.toLowerCase() === 'spam');
+      
+      if (spamOption) {
+        await clickEl(spamOption);
+        log("✅ Banned via UI fallback");
+        blockedCount++;
+        return true;
+      }
+      
+      return false;
+    } catch {
+      return false;
+    }
   }
 
   async function handleBubble(bubble) {
