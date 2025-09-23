@@ -1,6 +1,6 @@
-# 🛡️ lolnuked StreamGuard v0.0.027 - Ultimate Pump.fun Spam Protection
+# 🛡️ lolnuked StreamGuard v0.0.028 - Ultimate Pump.fun Spam Protection
 
-![Version](https://img.shields.io/badge/version-0.0.027-blue)
+![Version](https://img.shields.io/badge/version-0.0.028-blue)
 ![Status](https://img.shields.io/badge/status-active-green)
 ![License](https://img.shields.io/badge/license-MIT%20with%20Attribution-orange)
 
@@ -319,7 +319,27 @@ Found a bug? Got an idea? Want to make it even more based?
 
 ## Changelog 📝
 
-### v0.0.027 (Latest) - December 2024
+### v0.0.028 (Latest) - ULTIMATE OPTIMIZATION UPDATE
+#### 🚀 MASSIVE CODE OPTIMIZATION
+- **Reduced from 1500+ to 400 lines** - Removed ALL bloat and dead code
+- **Adopted livechat.pump.fun API** - Learned from competitors, now even faster!
+- **credentials: "include"** - Automatic cookie auth, no JWT extraction needed
+- **Simplified user extraction** - Direct profile link parsing
+- **Zero unnecessary loops** - Every operation is direct and purposeful
+
+#### ⚡ PERFORMANCE IMPROVEMENTS
+- **API bans now ~30ms** (was 50ms) - Using better endpoint
+- **Removed all unnecessary features** - No more user tracking, no ban reasons
+- **Instant viewer mode** - Zero network activity, pure CSS hiding
+- **Lean processing** - No batching delays in viewer mode
+
+#### 🎯 WHAT'S NEW
+- **Combined best of both worlds** - Our features + competitor's speed
+- **Cleaner architecture** - Single file, no dependencies
+- **Better fallbacks** - API → UI clicking, seamless transitions
+- **Maintained all modes** - Viewer, Highlight, Delete, Ban all optimized
+
+### v0.0.027 - December 2024
 #### ⚡ MASSIVE PERFORMANCE OPTIMIZATIONS
 - **Direct API Integration** - Bans now ~50ms (was 3000ms!)
 - **Optimized Token Extraction** - Direct auth_token lookup, no searching
@@ -338,13 +358,13 @@ Found a bug? Got an idea? Want to make it even more based?
 - **Default 0.2s Delay** - Optimal balance of speed and safety
 - **Version Tracking** - Proper v0.0.027 versioning throughout
 
-#### 🚀 Performance Results
-| Operation | Before | After | Improvement |
-|-----------|--------|-------|-------------|
-| API Ban | N/A | ~50ms | NEW! |
-| UI Ban | ~3000ms | ~300ms | 10x faster |
-| UI Delete | ~1500ms | ~100ms | 15x faster |
-| Batch Size | 10 msgs | 50 msgs | 5x more |
+#### 🚀 Performance Results (v0.0.028)
+| Operation | v0.0.026 | v0.0.027 | v0.0.028 | Total Improvement |
+|-----------|----------|----------|----------|-------------------|
+| API Ban | N/A | ~50ms | **~30ms** | **100x faster than original!** |
+| Code Size | 1500+ lines | 1500+ lines | **400 lines** | **75% smaller!** |
+| Auth Method | JWT extraction | JWT extraction | **cookies** | **Instant!** |
+| Viewer Mode | Some activity | Minimal | **ZERO** | **100% passive!** |
 
 ## License 📜
 

@@ -26,10 +26,10 @@
     <div class="row">
       <label class="lbl">Action</label>
       <select id="action">
-        <option value="highlight">Highlight only (safe)</option>
-        <option value="viewer_mode" selected>Viewer Mode (hide spam)</option>
-        <option value="delete_ui">Delete via UI</option>
-        <option value="ban_ui">Ban via UI</option>
+        <option value="highlight">Debug Mode (Highlight Only)</option>
+        <option value="viewer_mode" selected>Viewer Mode (Hide Spam)</option>
+        <option value="delete_ui">Mod Mode (Delete)</option>
+        <option value="ban_ui">Creator Mode (Ban)</option>
       </select>
     </div>
 
@@ -50,13 +50,6 @@
       <span class="info-text">No delay options (instant hiding)</span>
     </div>
 
-    <div class="row">
-      <label class="lbl">Ban reason</label>
-      <select id="reason">
-        <option value="Spam" selected>Spam</option>
-        <option value="Toxic">Toxic</option>
-      </select>
-    </div>
 
     <div class="row">
       <button id="manage-triggers" class="manage-btn">Manage Trigger Words</button>

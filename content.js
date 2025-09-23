@@ -934,48 +934,46 @@
     return true;
   }
 
-  // HTTP API ban method - inspired by pumphelper approach
-  // OPTIMIZED: Direct API ban - NO UI CLICKS!
-  async function banViaHTTPAPI(bubble) {
+  // GENIUS API from free version - INSTANT BANS!
+  async function banViaAPI(bubble) {
     try {
-      // Fast extraction - no unnecessary checks
-      const messageId = bubble.dataset.messageId || extractMessageId(bubble);
-      const userAddress = extractUserAddress(bubble);
+      // Extract user address THEIR WAY (simple & fast!)
+      const userLink = bubble.querySelector('a[href*="/profile/"]');
+      if (!userLink) return false;
+      
+      const userAddress = userLink.href.split("/profile/")[1];
+      if (!userAddress) return false;
+
+      // Extract room ID from URL
       const roomId = window.location.pathname.split('/').pop();
+      if (!roomId) return false;
+
+      // Use THEIR endpoint discovery - livechat.pump.fun!
+      const BAN_ENDPOINT = `https://livechat.pump.fun/chat/moderation/rooms/${roomId}/bans`;
       
-      if (!messageId || !userAddress || !roomId) {
-        return false; // Skip logging for speed
-      }
-      
-      // Get token FAST (optimized function)
-      const token = extractJWTToken();
-      if (!token) return false;
-      
-      // INSTANT API call - no delays!
-      const response = await fetch(`https://pump.fun/api/chat/${roomId}/ban`, {
-        method: 'POST',
+      // THEIR GENIUS: Use credentials:include for automatic auth!
+      const response = await fetch(BAN_ENDPOINT, {
+        method: "POST",
         headers: {
-          'Authorization': `Bearer ${token}`,
-          'auth-token': token,
-          'Content-Type': 'application/json',
-          'X-Requested-With': 'XMLHttpRequest'
+          "accept": "*/*",
+          "content-type": "application/json"
         },
         body: JSON.stringify({
-          messageId,
-          userAddress,
-          reason: 'Spam' // ALWAYS SPAM - NO SEARCHING!
+          userAddress: userAddress,
+          reason: "SPAM" // Always SPAM - no need to search!
         }),
-        credentials: 'include'
+        credentials: "include" // GENIUS - uses cookies automatically!
       });
-      
-      if (response.ok) {
-        log("⚡ INSTANT BAN via API!");
+
+      if (response.status === 204 || response.ok) {
+        log(`⚡ INSTANT BAN via API: ${userAddress}`);
+        blockedCount++;
         return true;
       }
       
       return false;
-    } catch (error) {
-      return false; // No logging for speed
+    } catch {
+      return false; // Silent fail, try UI method
     }
   }
   
@@ -1255,23 +1253,43 @@
     }
   }
 
-  // OPTIMIZED: Main ban function - tries fastest methods first
+  // MAIN BAN FUNCTION - API FIRST!
   async function banViaUI(bubble) {
-    // Try HTTP API first (fastest - ~50ms)
-    if (await banViaHTTPAPI(bubble)) {
-      log("⚡ HTTP API ban succeeded");
-      return true;
-    }
+    // Try API first (FASTEST - ~30ms!)
+    if (await banViaAPI(bubble)) return true;
     
-    // Fallback to optimized UI method (~300ms)
-    if (await banViaDirect(bubble)) {
-      log("✅ Direct UI ban succeeded");
-      return true;
+    // Fallback to UI clicking if API fails
+    try {
+      const kebab = getKebabButton(bubble);
+      if (!kebab) return false;
+      
+      await clickEl(kebab);
+      await sleep(100);
+      
+      // Click "Ban user"
+      const banOption = Array.from(document.querySelectorAll('[role="menuitem"]'))
+        .find(el => el.textContent?.toLowerCase().includes('ban'));
+      
+      if (!banOption) return false;
+      
+      await clickEl(banOption);
+      await sleep(100);
+      
+      // Click "Spam" reason - ALWAYS SPAM!
+      const spamOption = Array.from(document.querySelectorAll('[role="menuitem"]'))
+        .find(el => el.textContent?.toLowerCase() === 'spam');
+      
+      if (spamOption) {
+        await clickEl(spamOption);
+        log("✅ Banned via UI fallback");
+        blockedCount++;
+        return true;
+      }
+      
+      return false;
+    } catch {
+      return false;
     }
-    
-    // If both fail, try legacy as last resort
-    log("⚠️ Fast methods failed, trying legacy");
-    return await banViaUILegacy(bubble);
   }
 
   async function handleBubble(bubble) {
