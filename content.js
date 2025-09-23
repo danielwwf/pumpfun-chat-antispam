@@ -163,27 +163,41 @@
       }, 10000);
       
       try {
-        markHighlighted(bubble);
+        // ONLY mark highlighted if we're in highlight mode!
+        // For delete/ban, the API will remove the message from DOM
+        if (ACTION === "highlight") {
+          markHighlighted(bubble);
+        }
         
         if (ACTION === "delete_ui") {
-          const ok = await deleteViaUI(bubble);
-          log(`delete operation ${ok ? 'succeeded' : 'failed'}`);
-          if (ok) updateActivityTime(); // Update activity on successful operation
-        } else if (ACTION === "ban_ui") {
-          const ok = await banViaUI(bubble);
-          log(`ban operation ${ok ? 'succeeded' : 'failed'}`);
-          if (ok) {
-            updateActivityTime(); // Update activity on successful operation
-            blockedCount++; // Track successful bans
-            chrome.storage?.local?.set({ pfamBlockedCount: blockedCount });
+          // MOD MODE: DELETE VIA API ONLY - NO UI FALLBACK
+          const success = await deleteViaAPI(bubble);
+          if (success) {
+            log(`✅ API DELETE SUCCESS - message removed from DOM`);
+            updateActivityTime();
+          } else {
+            log(`⚠️ API delete failed - marking as processed to avoid retry`);
+            bubble.dataset.pfamProcessed = "1";
           }
-          
-          // If ban fails, fallback to delete to at least remove the message
-          if (!ok) {
-            log("ban failed - attempting fallback delete");
-            const deleteOk = await deleteViaUI(bubble);
-            log(`fallback delete operation ${deleteOk ? 'succeeded' : 'failed'}`);
-            if (deleteOk) updateActivityTime(); // Update activity on successful fallback
+        } else if (ACTION === "ban_ui") {
+          // CREATOR MODE: BAN VIA API ONLY - NO UI FALLBACK
+          const success = await banViaAPI(bubble);
+          if (success) {
+            log(`✅ API BAN SUCCESS - message removed from DOM`);
+            updateActivityTime();
+            blockedCount++;
+            chrome.storage?.local?.set({ pfamBlockedCount: blockedCount });
+          } else {
+            // If ban fails, try delete API (creator might have mod permissions too)
+            log("ban API failed - trying delete API");
+            const deleteSuccess = await deleteViaAPI(bubble);
+            if (deleteSuccess) {
+              log(`✅ API DELETE SUCCESS (fallback) - message removed from DOM`);
+              updateActivityTime();
+            } else {
+              log(`⚠️ Both APIs failed - marking as processed to avoid retry`);
+              bubble.dataset.pfamProcessed = "1";
+            }
           }
         }
         
@@ -493,6 +507,12 @@
   }
 
   function updateLastKnownMessage() {
+    // FIRST: Validate current reference is not spam
+    if (lastKnownMessage && isMatch(lastKnownMessage.text)) {
+      log(`🚨 CRITICAL: Current reference IS SPAM - FORCE INVALIDATING: "${lastKnownMessage.text}..."`);
+      lastKnownMessage = null;
+    }
+    
     const allMessages = document.querySelectorAll('div[data-message-id]');
     if (allMessages.length > 0) {
       // Find the last (most recent) NON-SPAM message
@@ -502,9 +522,9 @@
         const message = allMessages[i];
         const text = message.innerText || "";
         
-        // Skip spam messages - don't use them as reference
+        // ABSOLUTE RULE: TRIGGERS CAN NEVER BE REFERENCES
         if (isMatch(text)) {
-          log(`skipping spam message as reference: "${text.substring(0, 30)}..."`);
+          log(`⛔ REJECTING spam as reference: "${text.substring(0, 30)}..."`);
           continue;
         }
         
@@ -515,28 +535,33 @@
       
       if (lastNonSpamMessage) {
         const text = lastNonSpamMessage.innerText || "";
+        
+        // DOUBLE CHECK: Even if we think it's clean, verify it's not spam
+        if (isMatch(text)) {
+          log(`⛔⛔ DOUBLE CHECK FAILED - message is spam after all: "${text.substring(0, 30)}..."`);
+          return; // Don't update reference
+        }
+        
         lastKnownMessage = {
           id: lastNonSpamMessage.getAttribute('data-message-id'),
           text: text.substring(0, 50),
           timestamp: Date.now()
         };
         
-        log(`updated last known message (non-spam): "${lastKnownMessage.text}..." (${lastKnownMessage.id})`);
+        log(`✅ updated CLEAN reference: "${lastKnownMessage.text}..." (${lastKnownMessage.id})`);
       } else {
-        log("no non-spam messages found - keeping previous reference");
+        log("⚠️ NO clean messages found - reference remains null");
       }
-    }
-    
-    // CRITICAL: If current lastKnownMessage is now spam, invalidate it!
-    if (lastKnownMessage && isMatch(lastKnownMessage.text)) {
-      log(`🚨 INVALIDATING last known message - it's now a trigger: "${lastKnownMessage.text}..."`);
-      lastKnownMessage = null;
-      // Re-run to find a new non-spam reference
-      updateLastKnownMessage();
     }
   }
 
   function checkChatHealth() {
+    // CRITICAL VALIDATION: Reference can NEVER be spam
+    if (lastKnownMessage && isMatch(lastKnownMessage.text)) {
+      log("🚨🚨 CRITICAL ERROR: Reference IS SPAM - FORCE CLEARING");
+      lastKnownMessage = null;
+    }
+    
     if (!lastKnownMessage) {
       log("no last known message - updating reference");
       updateLastKnownMessage();
@@ -844,6 +869,12 @@
 
       if (response.status === 204 || response.ok) {
         log(`⚡ INSTANT DELETE via API (same endpoint as ban!): ${userAddress}`);
+        
+        // CRITICAL: Remove from DOM immediately after successful API delete!
+        // This prevents it from being picked up as a reference
+        bubble.remove();
+        log(`🗑️ Removed message from DOM after API delete`);
+        
         return true;
       }
 
@@ -1026,6 +1057,12 @@
       if (response.status === 204 || response.ok) {
         log(`⚡ INSTANT BAN via API: ${userAddress}`);
         blockedCount++;
+        
+        // CRITICAL: Remove from DOM immediately after successful API ban!
+        // This prevents it from being picked up as a reference
+        bubble.remove();
+        log(`🗑️ Removed message from DOM after API ban`);
+        
         return true;
       }
       
