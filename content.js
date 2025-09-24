@@ -41,8 +41,6 @@
     console.log("%cPF Auto-Mod", "color:#4af;font-weight:bold;", ...args);
   }
 
-  // Cache functions removed - using direct DOM queries for simplicity
-
   // VIEWER MODE SPECIALIZATION - Ultra lightweight path
   function startViewerMode() {
     // Skip existing messages - only process new ones
@@ -251,14 +249,7 @@
     }
   }
 
-  // Chat health functions removed - now part of unified monitoring
-
-  // Tab coordination functions removed - simplified to single tab assumption
-
-  // Self-healing functions removed - redundant with periodic scanning
-
-  // checkForStuckMessages and triggerSelfHealing functions removed
-  // Redundant with existing periodic scanning and processing timeout systems
+  // Removed systems: chat health, tab coordination, self-healing (now simplified)
 
   function forceRescanAllMessages() {
     log("🔄 FORCE RESCAN: Clearing all processed flags and rescanning everything");
@@ -277,8 +268,6 @@
     
     log(`cleared ${processedMessages.length} processed flags - rescanning all messages`);
     
-    // Cache system removed - no invalidation needed
-    
     setTimeout(() => {
       if (ENABLED) {
         scanRoot(document);
@@ -288,92 +277,61 @@
 
   function updateLastKnownMessage() {
     const allMessages = document.querySelectorAll('div[data-message-id]');
-    if (allMessages.length === 0) return;
-    
-    // PERFORMANCE: Reverse iteration to find last non-spam message quickly
-    let lastNonSpamMessage = null;
-    
-    for (let i = allMessages.length - 1; i >= 0; i--) {
-      const message = allMessages[i];
-      const text = message.innerText || "";
-      
-      // OPTIMIZED: Skip spam check for better performance
-      if (!isMatch(text)) {
-        lastNonSpamMessage = message;
-        break; // Early exit - found what we need
-      }
-      
-      // OPTIMIZED: Only log in debug mode
-      if (ACTION !== "viewer_mode") {
-        log(`skipping spam message as reference: "${text.substring(0, 30)}..."`);
-      }
-    }
-      
-    if (lastNonSpamMessage) {
-      const text = lastNonSpamMessage.innerText || "";
+    if (allMessages.length > 0) {
+      const lastMessage = allMessages[allMessages.length - 1];
       lastKnownMessage = {
-        id: lastNonSpamMessage.getAttribute('data-message-id'),
-        text: text.substring(0, 50),
+        id: lastMessage.getAttribute('data-message-id'),
         timestamp: Date.now()
       };
-      
-      log(`updated last known message (non-spam): "${lastKnownMessage.text}..." (${lastKnownMessage.id})`);
-    } else {
-      log("no non-spam messages found - keeping previous reference");
     }
   }
 
   function checkChatHealth() {
     if (!lastKnownMessage) {
-      log("no last known message - updating reference");
       updateLastKnownMessage();
       return;
     }
     
-    // Check if the last known message still exists
-    const lastMessageStillExists = document.querySelector(`div[data-message-id="${lastKnownMessage.id}"]`);
-    
-    if (lastMessageStillExists) {
-      log(`chat health OK - last message still exists: "${lastKnownMessage.text}..."`);
-      // Update to the newest message for next check
-      updateLastKnownMessage();
+    // Simple check: if last known message disappeared, chat might be dead
+    const exists = document.querySelector(`div[data-message-id="${lastKnownMessage.id}"]`);
+    if (exists) {
+      updateLastKnownMessage(); // Update to newest message
     } else {
-      const timeSinceUpdate = Date.now() - lastKnownMessage.timestamp;
-      const minutesAgo = Math.round(timeSinceUpdate / 60000);
-      
-      log(`🚨 CHAT DIED! Last known message from ${minutesAgo}min ago disappeared: "${lastKnownMessage.text}..."`);
-      log("attempting to refresh page to restore chat connection...");
-      
-      // Refresh the entire page
+      // Chat appears dead - refresh page
       window.location.reload();
     }
   }
 
-  // Unified text normalization with homoglyph handling
+  // Optimized text normalization with fast path for ASCII
+  const homoMap = {
+    "о":"o","Ο":"o","ο":"o","०":"o","ᴏ":"o","Ｏ":"o","ｏ":"o",
+    "р":"p","Р":"p","ᴘ":"p","Ｐ":"p","ｐ":"p",
+    "ѕ":"s","ʂ":"s","Ｓ":"s","ｓ":"s",
+    "υ":"u","ᴜ":"u","Ｕ":"u","ｕ":"u",
+    "ɡ":"g","ɢ":"g","Ｇ":"g","ｇ":"g",
+    "ʀ":"r","Ｒ":"r","ｒ":"r",
+    "а":"a","Ａ":"a","ａ":"a",
+    "е":"e","Ｅ":"e","ｅ":"e",
+    "і":"i","Ｉ":"i","ｉ":"i",
+    "х":"x","Χ":"x","ｘ":"x","Ｘ":"x",
+    "ј":"j","ȷ":"j"
+  };
+
   function normalize(text) {
     if (!text) return "";
     
-    // Homoglyph replacements (common Unicode tricks)
-    const homoMap = {
-      "о":"o","Ο":"o","ο":"o","०":"o","ᴏ":"o","Ｏ":"o","ｏ":"o",
-      "р":"p","Р":"p","ᴘ":"p","Ｐ":"p","ｐ":"p",
-      "ѕ":"s","ʂ":"s","Ｓ":"s","ｓ":"s",
-      "υ":"u","ᴜ":"u","Ｕ":"u","ｕ":"u",
-      "ɡ":"g","ɢ":"g","Ｇ":"g","ｇ":"g",
-      "ʀ":"r","Ｒ":"r","ｒ":"r",
-      "а":"a","Ａ":"a","ａ":"a",
-      "е":"e","Ｅ":"e","ｅ":"e",
-      "і":"i","Ｉ":"i","ｉ":"i",
-      "х":"x","Χ":"x","ｘ":"x","Ｘ":"x",
-      "ј":"j","ȷ":"j"
-    };
+    // Fast path for ASCII-only text (common case)
+    if (!/[^\x00-\x7F]/.test(text)) {
+      return text.toLowerCase();
+    }
     
+    // Full normalization for Unicode text
     return text
       .toLowerCase()
       .normalize("NFKD")
-      .replace(/[\u0300-\u036f]/g, "") // Remove diacritics
-      .replace(/[\u200B-\u200D\uFEFF]/g, "") // Remove zero-width chars
-      .replace(/[\u00A0-\uFFFF]/g, ch => homoMap[ch] || ch); // Fix homoglyphs
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[\u200B-\u200D\uFEFF]/g, "")
+      .replace(/[\u00A0-\uFFFF]/g, ch => homoMap[ch] || ch);
   }
 
   // Matcher: checks custom triggers + legacy hardcoded patterns
@@ -472,8 +430,7 @@
     // Hide the bubble completely (viewer mode) - PURE CSS, NO NETWORK ACTIVITY
     bubble.style.display = "none";
     
-    // No logging in production to minimize any potential activity
-    // log(`hidden spam bubble from view`);
+    // Pure CSS hiding - no logging needed
   }
 
   function getKebabButton(bubble) {
@@ -544,8 +501,6 @@
     await sleep(100); // small delay after click
   }
 
-  // normLabel function removed - was barely used
-
   function findMenuItemByText(needle) {
     const normalizedNeedle = normalize(needle);
     
@@ -612,22 +567,11 @@
     
     // Simplified - always process (single tab assumption)
     
-    // Try to extract just the message text, not the username
-    let messageText = "";
-    const fullText = bubble.innerText || "";
-    
-    // Look for p.break-words element which typically contains the message
+    // Extract message text (try message element, fallback to full text)
     const messageElement = bubble.querySelector('p.break-words, p[class*="break"]');
-    if (messageElement) {
-      messageText = messageElement.textContent || messageElement.innerText || "";
-      messageText = messageText.replace(/\s+/g, ' ').trim();
-      // Skip extraction logging in viewer mode
-    } else {
-      // Skip fallback logging in viewer mode
-    }
-    
-    // Fallback to full text if we can't extract the message
-    const textToCheck = messageText || fullText;
+    const textToCheck = messageElement ? 
+      (messageElement.textContent || "").replace(/\s+/g, ' ').trim() : 
+      (bubble.innerText || "");
     
     if (!isMatch(textToCheck)) return;
 
@@ -637,79 +581,43 @@
   }
 
   function scanRoot(root) {
-    if (!root || !ENABLED) return;
-    
-    // In viewer mode, don't process existing messages - only new ones from mutation observer
-    if (ACTION === "viewer_mode") {
-      return;
-    }
+    if (!root || !ENABLED || ACTION === "viewer_mode") return;
     
     const messages = root.querySelectorAll('div[data-message-id]');
     
-    // PERFORMANCE: Process in batches to avoid blocking UI
-    const SCAN_BATCH_SIZE = 20;
-    let processed = 0;
-    
-    function processBatch() {
-      const end = Math.min(processed + SCAN_BATCH_SIZE, messages.length);
-      
-      for (let i = processed; i < end; i++) {
-        handleBubble(messages[i]);
-      }
-      
-      processed = end;
-      
-      // Continue processing if more messages remain
-      if (processed < messages.length) {
-        setTimeout(processBatch, 0); // Yield to browser
-      }
+    // Direct processing - modern browsers handle this fine
+    for (const message of messages) {
+      handleBubble(message);
     }
-    
-    processBatch();
   }
 
   function installObserver(root) {
-    const mo = new MutationObserver(muts => {
-      if (!ENABLED) return; // Don't process if extension is disabled
+    const mo = new MutationObserver(mutations => {
+      if (!ENABLED) return;
       
-      // OPTIMIZED: Batch mutations and avoid duplicate processing
-      const processedBubbles = new Set();
-      
-      for (const m of muts) {
-        if (m.type === "childList") {
-          // PERFORMANCE: Process added nodes efficiently
-          for (const n of m.addedNodes) {
-            if (n.nodeType !== 1) continue;
-            
-            const bubble = closestBubble(n);
-            if (bubble && !processedBubbles.has(bubble)) {
-              processedBubbles.add(bubble);
-              handleBubble(bubble);
-            }
-            
-            // OPTIMIZED: Only scan if node has children
-            if (n.children && n.children.length > 0) {
-              const innerBubbles = n.querySelectorAll('div[data-message-id]');
-              for (const el of innerBubbles) {
-                if (!processedBubbles.has(el)) {
-                  processedBubbles.add(el);
+      for (const mutation of mutations) {
+        if (mutation.type === "childList") {
+          for (const node of mutation.addedNodes) {
+            if (node.nodeType === 1) {
+              const bubble = closestBubble(node);
+              if (bubble) handleBubble(bubble);
+              
+              // Check for nested message bubbles
+              const innerBubbles = node.querySelectorAll?.('div[data-message-id]');
+              if (innerBubbles) {
+                for (const el of innerBubbles) {
                   handleBubble(el);
                 }
               }
             }
           }
-        } else if (m.type === "characterData") {
-          const el = m.target && m.target.parentElement;
-          const bubble = closestBubble(el);
-          if (bubble && !processedBubbles.has(bubble)) {
-            processedBubbles.add(bubble);
-            handleBubble(bubble);
-          }
+        } else if (mutation.type === "characterData") {
+          const bubble = closestBubble(mutation.target?.parentElement);
+          if (bubble) handleBubble(bubble);
         }
       }
-      
-      // Cache system removed - no invalidation needed
     });
+    
     mo.observe(root, { subtree: true, childList: true, characterData: true });
   }
 
@@ -805,8 +713,6 @@
       }
     }
     
-    // DELAY_MS is now hardcoded - no need to listen for changes
-    // REASON is now hardcoded - no need to listen for changes
     if (K_CUSTOM_TRIGGERS in changes) {
       loadCustomTriggers(changes[K_CUSTOM_TRIGGERS].newValue);
       log("custom triggers updated - rescanning messages");
