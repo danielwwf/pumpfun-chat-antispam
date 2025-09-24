@@ -30,11 +30,19 @@
         <option value="viewer_mode" selected>Viewer Mode (hide spam)</option>
         <option value="delete_ui">Delete via UI</option>
         <option value="ban_ui">Ban via UI</option>
+        <option value="ban_hybrid">Ban Hybrid (API + UI fallback)</option>
       </select>
     </div>
 
     <div class="row">
       <button id="manage-triggers" class="manage-btn">Manage Trigger Words</button>
+    </div>
+
+    <div class="row" id="api-stats-row" style="display: none;">
+      <div class="api-stats">
+        <div style="font-size: 11px; color: var(--muted); margin-bottom: 4px;">API Performance:</div>
+        <div id="api-stats-text" style="font-size: 10px; font-family: monospace;">Checking...</div>
+      </div>
     </div>
 
     <details class="about">

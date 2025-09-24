@@ -3,6 +3,7 @@
   const K_ENABLED = "pfam_enabled";
   const K_ACTION = "pfam_action";          // "highlight" | "delete_ui" | "ban_ui"
   const K_CUSTOM_TRIGGERS = "pfam_custom_triggers"; // Custom trigger words
+  const K_CLOUDFLARE_BLOCKED = "pfam_cloudflare_blocked"; // Persistent Cloudflare detection
 
   const DEFAULTS = {
     [K_ENABLED]: true,
@@ -40,6 +41,209 @@
   function log(...args) {
     console.log("%cPF Auto-Mod", "color:#4af;font-weight:bold;", ...args);
   }
+
+  // ============ API-FIRST HYBRID SYSTEM ============
+  
+  // API statistics and rate limiting
+  let apiStats = {
+    attempts: 0,
+    successes: 0,
+    rateLimits: 0,
+    lastRateLimit: 0,
+    consecutiveFailures: 0,
+    cloudflareDetected: false
+  };
+
+  let lastAPICall = 0;
+  const API_RATE_LIMIT_BUFFER = 3000; // Wait 3 seconds between API calls (CONSERVATIVE!)
+  const MAX_API_CALLS_PER_MINUTE = 10; // Max 10 API calls per minute to avoid Cloudflare
+  let apiCallsThisMinute = 0;
+  let minuteStartTime = Date.now();
+
+  // Extract user wallet address from message bubble
+  function getUserAddress(bubble) {
+    // Strategy 1: Direct profile link
+    const profileLink = bubble.querySelector('a[href*="/profile/"]');
+    if (profileLink) {
+      const address = profileLink.href.split('/profile/')[1];
+      if (address && address.length > 30) { // Valid wallet address length
+        return address;
+      }
+    }
+    
+    // Strategy 2: Username link that we can click to get profile
+    const usernameLink = bubble.querySelector('a[href*="/profile/"], a:first-child');
+    if (usernameLink && usernameLink.href.includes('/profile/')) {
+      return usernameLink.href.split('/profile/')[1];
+    }
+    
+    // Strategy 3: Look for any wallet-like string in the bubble
+    const text = bubble.innerText || "";
+    const walletMatch = text.match(/[1-9A-HJ-NP-Za-km-z]{32,44}/); // Base58 wallet pattern
+    if (walletMatch) {
+      return walletMatch[0];
+    }
+    
+    return null; // No address found
+  }
+
+  // Get current coin/room ID from URL
+  function getCoinId() {
+    const path = window.location.pathname;
+    const coinId = path.split('/')[2]; // /coin/COINID or similar
+    return coinId;
+  }
+
+  // Build ban endpoint for current room
+  function getBanEndpoint() {
+    const coinId = getCoinId();
+    return `https://livechat.pump.fun/chat/moderation/rooms/${coinId}/bans`;
+  }
+
+  // Check if we should use API based on recent performance
+  function shouldUseAPI() {
+    // Don't use if Cloudflare detected
+    if (apiStats.cloudflareDetected) {
+      return false;
+    }
+    
+    // CONSERVATIVE: Check per-minute rate limiting
+    const now = Date.now();
+    if (now - minuteStartTime > 60000) {
+      // Reset minute counter
+      minuteStartTime = now;
+      apiCallsThisMinute = 0;
+    }
+    
+    // Don't exceed per-minute limit
+    if (apiCallsThisMinute >= MAX_API_CALLS_PER_MINUTE) {
+      return false;
+    }
+    
+    // Don't use if recently rate limited (wait 5 minutes - LONGER!)
+    const timeSinceRateLimit = Date.now() - apiStats.lastRateLimit;
+    if (timeSinceRateLimit < 300000) { // 5 minutes instead of 2
+      return false;
+    }
+    
+    // Don't use if too many consecutive failures (MORE CONSERVATIVE)
+    if (apiStats.consecutiveFailures >= 3) { // 3 instead of 5
+      return false;
+    }
+    
+    // Don't use if success rate is too low (MORE CONSERVATIVE)
+    if (apiStats.attempts > 10) { // Check earlier
+      const successRate = apiStats.successes / apiStats.attempts;
+      if (successRate < 0.5) { // Higher threshold
+        return false;
+      }
+    }
+    
+    return true;
+  }
+
+  // Main API ban function
+  async function banViaAPI(userAddress) {
+    try {
+      const endpoint = getBanEndpoint();
+      
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "accept": "*/*",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          userAddress: userAddress,
+          reason: "SPAM"
+        }),
+        credentials: "include"
+      });
+      
+      if (response.status === 204) {
+        return { success: true };
+      } else if (response.status === 429) {
+        return { success: false, rateLimited: true };
+      } else if (response.status === 403) {
+        return { success: false, noPermissions: true };
+      } else if (response.status === 403 && response.headers.get('server')?.includes('cloudflare')) {
+        apiStats.cloudflareDetected = true;
+        // Save Cloudflare detection permanently
+        chrome.storage?.sync.set({ [K_CLOUDFLARE_BLOCKED]: true });
+        log("🚨 Cloudflare protection detected - saved to storage");
+        return { success: false, cloudflareBlocked: true };
+      } else {
+        return { success: false, unknownError: true, status: response.status };
+      }
+      
+    } catch (error) {
+      return { success: false, networkError: true, error: error.message };
+    }
+  }
+
+  // Rate-limited API call wrapper with per-minute tracking
+  async function rateLimitedAPICall(userAddress) {
+    // Enforce minimum delay between API calls
+    const timeSinceLastCall = Date.now() - lastAPICall;
+    if (timeSinceLastCall < API_RATE_LIMIT_BUFFER) {
+      await sleep(API_RATE_LIMIT_BUFFER - timeSinceLastCall);
+    }
+    
+    // Track per-minute usage
+    apiCallsThisMinute++;
+    lastAPICall = Date.now();
+    
+    log(`🔍 API Call ${apiCallsThisMinute}/${MAX_API_CALLS_PER_MINUTE} this minute`);
+    
+    return await banViaAPI(userAddress);
+  }
+
+  // Main hybrid ban function
+  async function banViaHybrid(bubble) {
+    const userAddress = getUserAddress(bubble);
+    
+    // If no address found, fall back to UI immediately
+    if (!userAddress) {
+      log("No user address - using UI method");
+      return await banViaUI(bubble);
+    }
+    
+    // Try API first if conditions are favorable
+    if (shouldUseAPI()) {
+      log(`⚡ Attempting API ban: ${userAddress.substring(0, 8)}...`);
+      
+      const apiResult = await rateLimitedAPICall(userAddress);
+      apiStats.attempts++;
+      
+      if (apiResult.success) {
+        apiStats.successes++;
+        apiStats.consecutiveFailures = 0;
+        log(`✅ API ban successful! (${apiStats.successes}/${apiStats.attempts} success rate)`);
+        return true;
+      } else {
+        // Update stats based on failure type
+        if (apiResult.rateLimited) {
+          apiStats.rateLimits++;
+          apiStats.lastRateLimit = Date.now();
+          apiStats.consecutiveFailures++;
+          log(`🚨 Rate limited! Switching to UI mode temporarily`);
+        } else if (apiResult.cloudflareBlocked) {
+          log(`🚨 Cloudflare protection detected! Disabling API permanently`);
+        } else {
+          apiStats.consecutiveFailures++;
+          log(`❌ API ban failed: ${JSON.stringify(apiResult)}`);
+        }
+      }
+    } else {
+      log(`⏸️ API conditions not favorable - using UI method`);
+    }
+    
+    // Fallback to UI method
+    log(`🔄 Falling back to UI ban method`);
+    return await banViaUI(bubble);
+  }
+
+  // ============ END API SYSTEM ============
 
   // VIEWER MODE SPECIALIZATION - Ultra lightweight path
   function startViewerMode() {
@@ -147,6 +351,16 @@
             const deleteOk = await deleteViaUI(bubble);
             log(`fallback delete operation ${deleteOk ? 'succeeded' : 'failed'}`);
           }
+        } else if (ACTION === "ban_hybrid") {
+          const ok = await banViaHybrid(bubble);
+          log(`hybrid ban operation ${ok ? 'succeeded' : 'failed'}`);
+          
+          // If hybrid ban fails, try delete as last resort
+          if (!ok) {
+            log("hybrid ban failed - attempting fallback delete");
+            const deleteOk = await deleteViaUI(bubble);
+            log(`fallback delete operation ${deleteOk ? 'succeeded' : 'failed'}`);
+          }
         }
         
         await sleep(200);
@@ -188,13 +402,13 @@
           if (ACTION !== "viewer_mode") {
             const summaryCount = Math.min(5, allMessages.length);
             log(`visible messages summary (${allMessages.length} total, showing last ${summaryCount}):`);
-            
+          
             // PERFORMANCE: Only process last 5 messages for summary
             for (let i = Math.max(0, allMessages.length - summaryCount); i < allMessages.length; i++) {
               const bubble = allMessages[i];
-              const tx = bubble.innerText || "";
-              const processed = bubble.dataset.pfamProcessed ? "✓" : "✗";
-              const spam = isMatch(tx) ? "SPAM" : "OK";
+            const tx = bubble.innerText || "";
+            const processed = bubble.dataset.pfamProcessed ? "✓" : "✗";
+            const spam = isMatch(tx) ? "SPAM" : "OK";
               log(`  ${processed} ${spam}: "${tx.substring(0, 30)}..."`);
             }
           }
@@ -279,10 +493,10 @@
     const allMessages = document.querySelectorAll('div[data-message-id]');
     if (allMessages.length > 0) {
       const lastMessage = allMessages[allMessages.length - 1];
-      lastKnownMessage = {
+        lastKnownMessage = {
         id: lastMessage.getAttribute('data-message-id'),
-        timestamp: Date.now()
-      };
+          timestamp: Date.now()
+        };
     }
   }
 
@@ -455,9 +669,9 @@
     
     for (const selector of selectors) {
       try {
-        const btn = bubble.querySelector(selector);
-        if (btn && isVisible(btn)) {
-          log(`found kebab button with selector: ${selector}`);
+      const btn = bubble.querySelector(selector);
+      if (btn && isVisible(btn)) {
+        log(`found kebab button with selector: ${selector}`);
           return btn;
         }
       } catch (e) {
@@ -508,14 +722,14 @@
     const selectors = '[role="menuitem"], [role="option"], div[data-radix-collection-item]';
     const candidates = document.querySelectorAll(selectors);
     
-    for (const el of candidates) {
-      if (!isVisible(el)) continue;
-      
+      for (const el of candidates) {
+        if (!isVisible(el)) continue;
+        
       const text = el.innerText || el.textContent || el.getAttribute("aria-label") || "";
       const normalizedText = normalize(text);
       
       if (normalizedText.includes(normalizedNeedle) || needle.toLowerCase() === text.toLowerCase()) {
-        return el;
+            return el;
       }
     }
     
@@ -544,18 +758,18 @@
     await sleep(DELAY_MS);
 
     const ban = findMenuItemByText("ban user");
-    if (!ban) {
+    if (!ban) { 
       document.body.click(); // Close menu
-      return false;
+      return false; 
     }
     
     await clickEl(ban);
     await sleep(DELAY_MS + 300);
 
     const reason = findMenuItemByText("spam");
-    if (!reason) {
+      if (!reason) {
       document.body.click(); // Close menu
-      return false;
+      return false; 
     }
     
     await clickEl(reason);
@@ -600,7 +814,7 @@
           for (const node of mutation.addedNodes) {
             if (node.nodeType === 1) {
               const bubble = closestBubble(node);
-              if (bubble) handleBubble(bubble);
+            if (bubble) handleBubble(bubble);
               
               // Check for nested message bubbles
               const innerBubbles = node.querySelectorAll?.('div[data-message-id]');
@@ -622,7 +836,7 @@
   }
 
   function loadFromStorage(cb) {
-    const keysToLoad = {...DEFAULTS, [K_CUSTOM_TRIGGERS]: ""};
+    const keysToLoad = {...DEFAULTS, [K_CUSTOM_TRIGGERS]: "", [K_CLOUDFLARE_BLOCKED]: false};
     
     chrome.storage?.sync.get(keysToLoad, (res) => {
       ENABLED  = !!res[K_ENABLED];
@@ -632,6 +846,12 @@
       
       // Load custom triggers
       loadCustomTriggers(res[K_CUSTOM_TRIGGERS]);
+      
+      // Load persistent Cloudflare detection
+      apiStats.cloudflareDetected = !!res[K_CLOUDFLARE_BLOCKED];
+      if (apiStats.cloudflareDetected) {
+        log("🚨 Cloudflare protection was previously detected - API disabled");
+      }
       
       cb && cb();
     });
@@ -758,8 +978,14 @@
 
   // Message listener for popup communication
   chrome.runtime?.onMessage?.addListener((request, sender, sendResponse) => {
-    // In viewer mode, ignore all messages except getTabStatus
-    if (ACTION === "viewer_mode" && request.action !== "getTabStatus") {
+    console.log("🔍 DEBUG_MESSAGE: *** MESSAGE RECEIVED ***");
+    console.log("🔍 DEBUG_MESSAGE: Action:", request.action);
+    console.log("🔍 DEBUG_MESSAGE: Current ACTION mode:", ACTION);
+    console.log("🔍 DEBUG_MESSAGE: ENABLED:", ENABLED);
+    
+    // In viewer mode, only ignore non-essential messages
+    if (ACTION === "viewer_mode" && request.action !== "getTabStatus" && request.action !== "getAPIStats") {
+      console.log("🔍 DEBUG_MESSAGE: Ignoring message in viewer mode");
       return;
     }
     if (request.action === "getTabStatus") {
@@ -782,6 +1008,27 @@
       return true; // Will respond asynchronously
     } else if (request.action === "forceRescan") {
       forceRescanAllMessages();
+      sendResponse({ success: true });
+    } else if (request.action === "getAPIStats") {
+      console.log("🔍 DEBUG_MESSAGE: Processing getAPIStats request");
+      console.log("🔍 DEBUG_MESSAGE: apiStats:", apiStats);
+      console.log("🔍 DEBUG_MESSAGE: shouldUseAPI:", shouldUseAPI());
+      console.log("🔍 DEBUG_MESSAGE: coinId:", getCoinId());
+      
+      const response = { 
+        stats: apiStats,
+        shouldUseAPI: shouldUseAPI(),
+        coinId: getCoinId(),
+        banEndpoint: getBanEndpoint()
+      };
+      
+      console.log("🔍 DEBUG_MESSAGE: Sending response:", response);
+      sendResponse(response);
+    } else if (request.action === "resetCloudflare") {
+      // Manual reset for Cloudflare detection
+      apiStats.cloudflareDetected = false;
+      chrome.storage?.sync.set({ [K_CLOUDFLARE_BLOCKED]: false });
+      log("🔄 Cloudflare detection manually reset - API re-enabled");
       sendResponse({ success: true });
     }
   });

@@ -28,6 +28,11 @@ function load() {
     }
   }, 1000);
   
+  // Show API stats if hybrid mode is selected (with small delay for content script)
+  setTimeout(() => {
+    updateAPIStatsVisibility();
+  }, 500);
+  
   // Delay is now hardcoded - no visibility management needed
 }
 
@@ -37,6 +42,9 @@ function bind() {
   });
   $("#action").addEventListener("change", e => {
     chrome.storage.sync.set({ [K_ACTION]: e.target.value });
+    
+    // Show/hide API stats based on mode
+    updateAPIStatsVisibility();
     
     // Delay is hardcoded - no visibility management needed
   });
@@ -124,6 +132,80 @@ function updateTabStatusUI(isActive, tabId) {
     text.textContent = "Inactive (dormant)";
     button.style.display = "block";
   }
+}
+
+// API stats management
+function updateAPIStatsVisibility() {
+  const actionValue = $("#action").value;
+  const statsRow = $("#api-stats-row");
+  
+  if (actionValue === "ban_hybrid") {
+    statsRow.style.display = "flex";
+    updateAPIStats();
+    // Refresh stats every 5 seconds when visible
+    if (!window.apiStatsInterval) {
+      window.apiStatsInterval = setInterval(updateAPIStats, 5000);
+    }
+  } else {
+    statsRow.style.display = "none";
+    if (window.apiStatsInterval) {
+      clearInterval(window.apiStatsInterval);
+      window.apiStatsInterval = null;
+    }
+  }
+}
+
+function updateAPIStats() {
+  console.log("🔍 DEBUG_API_STATS: Starting updateAPIStats()");
+  
+  chrome.tabs?.query({active: true, currentWindow: true}, (tabs) => {
+    console.log("🔍 DEBUG_API_STATS: Got tabs:", tabs?.length || 0);
+    
+    if (!tabs || !tabs[0] || !tabs[0].url || !tabs[0].url.includes('pump.fun')) {
+      console.log("🔍 DEBUG_API_STATS: Not on pump.fun");
+      $("#api-stats-text").textContent = "Not on pump.fun";
+      return;
+    }
+    
+    console.log("🔍 DEBUG_API_STATS: Sending getAPIStats message to tab:", tabs[0].id);
+    
+    chrome.tabs?.sendMessage(tabs[0].id, {action: "getAPIStats"}, (response) => {
+      console.log("🔍 DEBUG_API_STATS: Got response:", response);
+      console.log("🔍 DEBUG_API_STATS: Runtime error:", chrome.runtime.lastError?.message || "none");
+      
+      if (chrome.runtime.lastError) {
+        console.log("🔍 DEBUG_API_STATS: Communication failed, retrying in 2s");
+        $("#api-stats-text").textContent = "Extension loading...";
+        // Retry after a delay
+        setTimeout(updateAPIStats, 2000);
+        return;
+      }
+      
+      if (response && response.stats) {
+        const stats = response.stats;
+        const successRate = stats.attempts > 0 ? 
+          Math.round((stats.successes / stats.attempts) * 100) : 0;
+        
+        let statusText = `${stats.successes}/${stats.attempts} (${successRate}%)`;
+        
+        if (stats.rateLimits > 0) {
+          statusText += ` - ${stats.rateLimits} rate limits`;
+        }
+        
+        if (stats.cloudflareDetected) {
+          statusText += " - CF BLOCKED";
+        } else if (!response.shouldUseAPI) {
+          statusText += " - UI MODE";
+        } else {
+          statusText += " - API READY";
+        }
+        
+        $("#api-stats-text").textContent = statusText;
+      } else {
+        $("#api-stats-text").textContent = "No data";
+      }
+    });
+  });
 }
 
 // updateDelayVisibility function removed - delay is now hardcoded to 200ms
