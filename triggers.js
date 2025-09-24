@@ -52,7 +52,14 @@ function saveTriggers() {
       
       // Notify content script that triggers changed
       chrome.tabs?.query({active: true, currentWindow: true}, (tabs) => {
-        chrome.tabs?.sendMessage(tabs[0].id, {action: "triggersUpdated"});
+        if (tabs && tabs[0] && tabs[0].url && tabs[0].url.includes('pump.fun')) {
+          chrome.tabs?.sendMessage(tabs[0].id, {action: "triggersUpdated"}, (response) => {
+            // Clear any runtime errors silently
+            if (chrome.runtime.lastError) {
+              console.log('Triggers update notification failed:', chrome.runtime.lastError.message);
+            }
+          });
+        }
       });
     }
   });

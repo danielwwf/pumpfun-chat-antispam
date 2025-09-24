@@ -1,14 +1,10 @@
 // Popup settings glue
 const K_ENABLED = "pfam_enabled";
 const K_ACTION  = "pfam_action";       // "highlight" | "delete_ui" | "ban_ui"
-const K_DELAY   = "pfam_delay_ms";
-const K_REASON  = "pfam_ban_reason";
 
 const defaults = {
   [K_ENABLED]: true,
-  [K_ACTION]: "viewer_mode",
-  [K_DELAY]: 2000,
-  [K_REASON]: "Spam"
+  [K_ACTION]: "viewer_mode"
 };
 
 const $ = sel => document.querySelector(sel);
@@ -17,16 +13,22 @@ function load() {
   chrome.storage.sync.get(defaults, res => {
     $("#enabled").checked = !!res[K_ENABLED];
     $("#action").value    = res[K_ACTION];
-    $("#delay").value     = String(res[K_DELAY]);
-    $("#reason").value    = res[K_REASON];
+    // Delay is now hardcoded to 200ms - no UI needed
+    // Ban reason is now hardcoded to 'Spam' - no UI needed
   });
   
-  // Load tab status
+  // Load tab status with retry
   loadTabStatus();
   
-  // Set initial delay visibility based on current action
-  const currentAction = $("#action").value;
-  updateDelayVisibility(currentAction);
+  // Retry tab status after a short delay if needed
+  setTimeout(() => {
+    const tabText = $("#tab-text").textContent;
+    if (tabText === "Extension loading..." || tabText === "Checking tab status...") {
+      loadTabStatus();
+    }
+  }, 1000);
+  
+  // Delay is now hardcoded - no visibility management needed
 }
 
 function bind() {
@@ -36,20 +38,23 @@ function bind() {
   $("#action").addEventListener("change", e => {
     chrome.storage.sync.set({ [K_ACTION]: e.target.value });
     
-    // Hide delay setting for viewer mode (it's instant)
-    updateDelayVisibility(e.target.value);
+    // Delay is hardcoded - no visibility management needed
   });
-  $("#delay").addEventListener("change", e => {
-    chrome.storage.sync.set({ [K_DELAY]: Number(e.target.value) });
-  });
-  $("#reason").addEventListener("change", e => {
-    chrome.storage.sync.set({ [K_REASON]: e.target.value });
-  });
+  // Delay removed - always use 200ms (0.2s)
+  // Ban reason removed - always use 'Spam'
   
   // Force activate button
   $("#force-activate").addEventListener("click", () => {
     chrome.tabs?.query({active: true, currentWindow: true}, (tabs) => {
-      chrome.tabs?.sendMessage(tabs[0].id, {action: "forceActivate"}, () => {
+      if (!tabs || !tabs[0]) return;
+      
+      chrome.tabs?.sendMessage(tabs[0].id, {action: "forceActivate"}, (response) => {
+        // Clear any runtime errors
+        if (chrome.runtime.lastError) {
+          console.log('Force activate failed:', chrome.runtime.lastError.message);
+          return;
+        }
+        
         // Reload status after activation
         setTimeout(loadTabStatus, 500);
       });
@@ -69,12 +74,37 @@ function bind() {
 
 function loadTabStatus() {
   chrome.tabs?.query({active: true, currentWindow: true}, (tabs) => {
-    chrome.tabs?.sendMessage(tabs[0].id, {action: "getTabStatus"}, (response) => {
+    if (!tabs || !tabs[0]) {
+      $("#tab-text").textContent = "No active tab";
+      return;
+    }
+    
+    const tab = tabs[0];
+    
+    // Check if we're on pump.fun
+    if (!tab.url || !tab.url.includes('pump.fun')) {
+      $("#tab-text").textContent = "Not on pump.fun";
+      $("#tab-indicator").textContent = "⚪";
+      $("#force-activate").style.display = "none";
+      return;
+    }
+    
+    chrome.tabs?.sendMessage(tab.id, {action: "getTabStatus"}, (response) => {
+      // Clear any runtime errors
+      if (chrome.runtime.lastError) {
+        console.log('Content script not ready:', chrome.runtime.lastError.message);
+        $("#tab-text").textContent = "Extension loading...";
+        $("#tab-indicator").textContent = "🔄";
+        $("#force-activate").style.display = "none";
+        return;
+      }
+      
       if (response) {
         updateTabStatusUI(response.isActive, response.tabId);
       } else {
-        // Fallback if content script not ready
         $("#tab-text").textContent = "Extension loading...";
+        $("#tab-indicator").textContent = "🔄";
+        $("#force-activate").style.display = "none";
       }
     });
   });
@@ -96,17 +126,7 @@ function updateTabStatusUI(isActive, tabId) {
   }
 }
 
-function updateDelayVisibility(actionMode) {
-  const delayRow = $("#delay").closest('.row');
-  
-  if (actionMode === "viewer_mode" || actionMode === "highlight") {
-    // Hide delay setting for instant modes
-    delayRow.style.display = "none";
-  } else {
-    // Show delay setting for delete/ban modes
-    delayRow.style.display = "flex";
-  }
-}
+// updateDelayVisibility function removed - delay is now hardcoded to 200ms
 
 document.addEventListener("DOMContentLoaded", () => {
   load(); bind();

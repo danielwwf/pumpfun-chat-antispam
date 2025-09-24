@@ -154,15 +154,11 @@ If you're paranoid (and you should be in crypto):
 - **Ban via UI**: Deletes AND bans the spammer (nuclear option for mods)
 
 **⏱️ Step Delay:**
-- How long to wait between UI actions (0.2s - 2s)
+- **Always 0.2s**: Lightning fast and optimized - no user configuration needed!
 - **Not used in Viewer Mode** (hiding is instant)
-- **0.2s (fast)** = Lightning speed for mass spam cleaning
-- **0.5s-1s** = Balanced speed and reliability
-- **1.5s-2s** = Conservative, very safe
 
 **🔨 Ban Reason:**
-- **Spam**: For the obvious spam (most common)
-- **Toxic**: For the really annoying ones
+- **Always "Spam"**: Simplified - no need to choose, everything gets nuked as spam!
 
 ### Usage Tips for Maximum Effectiveness 🔥
 

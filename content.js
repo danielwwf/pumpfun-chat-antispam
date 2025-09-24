@@ -1,70 +1,74 @@
 // Pumpfun Auto Mod — content script (3 actions only: highlight, delete via UI, ban via UI)
 (() => {
-  // -------- storage keys & defaults --------
   const K_ENABLED = "pfam_enabled";
   const K_ACTION = "pfam_action";          // "highlight" | "delete_ui" | "ban_ui"
-  const K_DELAY  = "pfam_delay_ms";        // number (ms)
-  const K_REASON = "pfam_ban_reason";      // "Spam" | "Toxic"
   const K_CUSTOM_TRIGGERS = "pfam_custom_triggers"; // Custom trigger words
 
   const DEFAULTS = {
     [K_ENABLED]: true,
-    [K_ACTION]: "viewer_mode",
-    [K_DELAY]: 2000,
-    [K_REASON]: "Spam"
+    [K_ACTION]: "viewer_mode"
   };
 
   let ENABLED  = DEFAULTS[K_ENABLED];
   let ACTION   = DEFAULTS[K_ACTION];
-  let DELAY_MS = DEFAULTS[K_DELAY];
-  let REASON   = DEFAULTS[K_REASON];
+  const DELAY_MS = 200; // Hardcoded to 0.2s - LIGHTNING FAST, no user fuckups!
+  const REASON = "Spam"; // Always use Spam - no user choice needed
   let CUSTOM_TRIGGERS = []; // Array of custom trigger words
 
-  // Global processing lock to prevent concurrent UI operations
   let isProcessing = false;
   let processingTimeout = null;
   
-  // Batch processing to handle high volume spam
+  // Batch processing
   let pendingMessages = new Set();
   let batchTimeout = null;
   const BATCH_DELAY = 1000; // Wait 1 second to collect messages before processing
   const MAX_BATCH_SIZE = 10; // Process max 10 messages at once
   
-  // Periodic scanning to catch missed messages
-  let periodicScanInterval = null;
-  const PERIODIC_SCAN_DELAY = 5000; // Scan every 5 seconds for missed messages
+  let cachedMessages = null;
+  let cacheTimestamp = 0;
+  const CACHE_DURATION = 1000;
   
-  // Chat health monitoring
+  // Unified monitoring system (scanning + health)
+  let monitoringInterval = null;
+  const MONITORING_DELAY = 5000; // Monitor every 5 seconds
   let lastKnownMessage = null;
-  let chatHealthInterval = null;
-  const CHAT_HEALTH_CHECK_DELAY = 30000; // Check every 30 seconds if chat is alive
+  let healthCheckCounter = 0;
   
-  // Tab registration system
+  // Tab registration
   let tabId = 'tab_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
   let isActiveTab = false;
   let tabHeartbeatInterval = null;
   const TAB_HEARTBEAT_DELAY = 10000; // Send heartbeat every 10 seconds
   const TAB_HEARTBEAT_TIMEOUT = 15000; // Consider tab dead after 15 seconds
   
-  // Self-healing system for stuck messages
-  let lastActivityTime = Date.now();
-  let selfHealingInterval = null;
-  const SELF_HEALING_CHECK_DELAY = 15000; // Check every 15 seconds for stuck messages
-  const STUCK_MESSAGE_TIMEOUT = 60000; // Consider message stuck after 60 seconds
-  const ACTIVITY_TIMEOUT = 30000; // No activity for 30 seconds = potential stuck state
+  // Self-healing system removed - redundant with periodic scanning
 
-  // -------- helpers --------
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
   function log(...args) {
     console.log("%cPF Auto-Mod", "color:#4af;font-weight:bold;", ...args);
   }
 
-  // Batch processing functions
+  function getAllMessages(forceRefresh = false) {
+    const now = Date.now();
+    if (!forceRefresh && cachedMessages && (now - cacheTimestamp) < CACHE_DURATION) {
+      return cachedMessages; // Return cached result
+    }
+    
+    // Refresh cache
+    cachedMessages = document.querySelectorAll('div[data-message-id]');
+    cacheTimestamp = now;
+    return cachedMessages;
+  }
+  
+  function invalidateMessageCache() {
+    cachedMessages = null;
+    cacheTimestamp = 0;
+  }
+
   function addToBatch(bubble) {
     if (!bubble || !ENABLED) return;
     
-    // In viewer mode, process immediately without batching or timers
     if (ACTION === "viewer_mode") {
       if (isMatch(bubble.innerText || "")) {
         hideBubble(bubble);
@@ -73,10 +77,6 @@
     }
     
     pendingMessages.add(bubble);
-    log(`added to batch (${pendingMessages.size} pending)`);
-    
-    // Update activity time when we add messages (not in viewer mode)
-    updateActivityTime();
     
     // If batch is full, process immediately
     if (pendingMessages.size >= MAX_BATCH_SIZE) {
@@ -84,7 +84,6 @@
       return;
     }
     
-    // Otherwise, wait for more messages
     if (batchTimeout) clearTimeout(batchTimeout);
     batchTimeout = setTimeout(() => {
       processBatch();
@@ -102,20 +101,14 @@
     const messages = Array.from(pendingMessages);
     pendingMessages.clear();
     
-    log(`processing batch of ${messages.length} messages`);
-    
     if (ACTION === "highlight") {
-      // Highlight all at once (fast)
       messages.forEach(bubble => {
         if (isMatch(bubble.innerText || "")) {
           markHighlighted(bubble);
         }
       });
-      log(`highlighted ${messages.length} messages`);
       return;
     }
-    
-    // Viewer mode should never reach here (processed immediately in addToBatch)
     
     // For delete/ban operations, process one by one with lock
     await processMessagesSequentially(messages);
@@ -128,7 +121,6 @@
       const tx = bubble.innerText || "";
       if (!isMatch(tx) || bubble.dataset.pfamProcessed) continue;
       
-      // Set processing lock
       isProcessing = true;
       
       // Set timeout safety
@@ -145,28 +137,23 @@
         if (ACTION === "delete_ui") {
           const ok = await deleteViaUI(bubble);
           log(`delete operation ${ok ? 'succeeded' : 'failed'}`);
-          if (ok) updateActivityTime(); // Update activity on successful operation
         } else if (ACTION === "ban_ui") {
           const ok = await banViaUI(bubble);
           log(`ban operation ${ok ? 'succeeded' : 'failed'}`);
-          if (ok) updateActivityTime(); // Update activity on successful operation
           
           // If ban fails, fallback to delete to at least remove the message
           if (!ok) {
             log("ban failed - attempting fallback delete");
             const deleteOk = await deleteViaUI(bubble);
             log(`fallback delete operation ${deleteOk ? 'succeeded' : 'failed'}`);
-            if (deleteOk) updateActivityTime(); // Update activity on successful fallback
           }
         }
         
-        // Small delay between operations
         await sleep(200);
         
       } catch (error) {
         log("batch operation error:", error);
       } finally {
-        // Release lock
         if (processingTimeout) {
           clearTimeout(processingTimeout);
           processingTimeout = null;
@@ -175,102 +162,94 @@
       }
     }
     
-    log("batch processing completed - checking for remaining messages");
-    
     // Update last known message after processing
     updateLastKnownMessage();
     
     // After processing batch, check if there are still unprocessed messages
     setTimeout(() => {
       if (!isProcessing && ENABLED) {
-        // Get ALL message bubbles, not just unprocessed ones
-        const allMessages = document.querySelectorAll('div[data-message-id]');
-        const spamMessages = Array.from(allMessages).filter(bubble => {
-          // Skip if already processed
-          if (bubble.dataset.pfamProcessed) return false;
+        const allMessages = getAllMessages();
+        const spamMessages = [];
+        
+        for (const bubble of allMessages) {
+          if (bubble.dataset.pfamProcessed) continue;
           
           const tx = bubble.innerText || "";
-          const isSpam = isMatch(tx);
-          
-          if (isSpam) {
-            log(`found unprocessed spam: "${tx.substring(0, 50)}..."`);
+          if (isMatch(tx)) {
+            spamMessages.push(bubble);
           }
-          
-          return isSpam;
-        });
+        }
         
         if (spamMessages.length > 0) {
-          log(`found ${spamMessages.length} remaining spam messages - adding to new batch`);
-          spamMessages.forEach(bubble => addToBatch(bubble));
+          for (const bubble of spamMessages) {
+            addToBatch(bubble);
+          }
         } else {
-          log("no remaining spam messages found - scanning complete");
-          
-          // Double check by logging what messages are visible
-          const allVisibleMessages = Array.from(allMessages).map(bubble => {
-            const tx = bubble.innerText || "";
-            const processed = bubble.dataset.pfamProcessed ? "✓" : "✗";
-            const spam = isMatch(tx) ? "SPAM" : "OK";
-            return `${processed} ${spam}: "${tx.substring(0, 30)}..."`;
-          });
-          
-          log(`visible messages summary (${allVisibleMessages.length} total):`);
-          allVisibleMessages.slice(-5).forEach(msg => log(`  ${msg}`)); // Show last 5
+          if (ACTION !== "viewer_mode") {
+            const summaryCount = Math.min(5, allMessages.length);
+            log(`visible messages summary (${allMessages.length} total, showing last ${summaryCount}):`);
+            
+            // PERFORMANCE: Only process last 5 messages for summary
+            for (let i = Math.max(0, allMessages.length - summaryCount); i < allMessages.length; i++) {
+              const bubble = allMessages[i];
+              const tx = bubble.innerText || "";
+              const processed = bubble.dataset.pfamProcessed ? "✓" : "✗";
+              const spam = isMatch(tx) ? "SPAM" : "OK";
+              log(`  ${processed} ${spam}: "${tx.substring(0, 30)}..."`);
+            }
+          }
         }
       }
     }, 1500); // Increased delay to let UI settle
   }
 
-  function startPeriodicScanning() {
-    if (periodicScanInterval) clearInterval(periodicScanInterval);
-    
-    periodicScanInterval = setInterval(() => {
-      if (!ENABLED || isProcessing || pendingMessages.size > 0) return;
-      
-      // Scan for any unprocessed spam messages
-      const allMessages = document.querySelectorAll('div[data-message-id]:not([data-pfam-processed])');
-      const spamMessages = Array.from(allMessages).filter(bubble => {
-        const tx = bubble.innerText || "";
-        return isMatch(tx);
-      });
-      
-      if (spamMessages.length > 0) {
-        log(`periodic scan found ${spamMessages.length} missed spam messages`);
-        spamMessages.forEach(bubble => addToBatch(bubble));
-      }
-    }, PERIODIC_SCAN_DELAY);
-  }
-
-  function stopPeriodicScanning() {
-    if (periodicScanInterval) {
-      clearInterval(periodicScanInterval);
-      periodicScanInterval = null;
-      log("periodic scanning stopped");
-    }
-  }
-
-  function startChatHealthMonitoring() {
-    if (chatHealthInterval) clearInterval(chatHealthInterval);
+  function startMonitoring() {
+    if (monitoringInterval) clearInterval(monitoringInterval);
     
     // Update last known message immediately
     updateLastKnownMessage();
     
-    chatHealthInterval = setInterval(() => {
+    monitoringInterval = setInterval(() => {
       if (!ENABLED) return;
       
-      checkChatHealth();
-    }, CHAT_HEALTH_CHECK_DELAY);
-    
-    log("chat health monitoring started - checking every 30 seconds");
+      // Scan for missed messages (every cycle)
+      if (!isProcessing && pendingMessages.size === 0) {
+        const unprocessedMessages = document.querySelectorAll('div[data-message-id]:not([data-pfam-processed])');
+        if (unprocessedMessages.length > 0) {
+          const spamMessages = [];
+          for (const bubble of unprocessedMessages) {
+            const tx = bubble.innerText || "";
+            if (isMatch(tx)) {
+              spamMessages.push(bubble);
+            }
+          }
+          
+          if (spamMessages.length > 0) {
+            for (const bubble of spamMessages) {
+              addToBatch(bubble);
+            }
+          }
+        }
+      }
+      
+      // Chat health check (every 6th cycle = 30 seconds)
+      healthCheckCounter++;
+      if (healthCheckCounter >= 6) {
+        healthCheckCounter = 0;
+        checkChatHealth();
+      }
+    }, MONITORING_DELAY);
   }
 
-  function stopChatHealthMonitoring() {
-    if (chatHealthInterval) {
-      clearInterval(chatHealthInterval);
-      chatHealthInterval = null;
+  function stopMonitoring() {
+    if (monitoringInterval) {
+      clearInterval(monitoringInterval);
+      monitoringInterval = null;
       lastKnownMessage = null;
-      log("chat health monitoring stopped");
     }
   }
+
+  // Chat health functions removed - now part of unified monitoring
 
   // Tab registration functions
   function checkTabStatus() {
@@ -318,13 +297,7 @@
   }
 
   function startTabHeartbeat() {
-    // Don't start heartbeat in viewer mode - it's not needed and could cause rate limits
-    if (ACTION === "viewer_mode") {
-      log("viewer mode: skipping tab heartbeat (not needed)");
-      return;
-    }
-    
-    if (!chrome.storage?.local) return;
+    if (ACTION === "viewer_mode" || !chrome.storage?.local) return;
     if (tabHeartbeatInterval) clearInterval(tabHeartbeatInterval);
     
     tabHeartbeatInterval = setInterval(() => {
@@ -332,7 +305,6 @@
         try {
           chrome.storage.local.set({ lastHeartbeat: Date.now() });
         } catch (error) {
-          // Silently handle storage errors
           log("heartbeat storage error (non-critical)");
         }
       }
@@ -351,112 +323,30 @@
     becomeActiveTab();
   }
 
-  // Self-healing system functions
-  function startSelfHealing() {
-    if (selfHealingInterval) clearInterval(selfHealingInterval);
-    
-    selfHealingInterval = setInterval(() => {
-      if (!ENABLED || !isActiveTab) return;
-      
-      checkForStuckMessages();
-    }, SELF_HEALING_CHECK_DELAY);
-    
-    log("self-healing system started - checking every 15 seconds for stuck messages");
-  }
+  // Self-healing functions removed - redundant with periodic scanning
 
-  function stopSelfHealing() {
-    if (selfHealingInterval) {
-      clearInterval(selfHealingInterval);
-      selfHealingInterval = null;
-      log("self-healing system stopped");
-    }
-  }
-
-  function updateActivityTime() {
-    lastActivityTime = Date.now();
-  }
-
-  function checkForStuckMessages() {
-    const now = Date.now();
-    const timeSinceActivity = now - lastActivityTime;
-    
-    // Find all highlighted messages (these should have been processed)
-    const highlightedMessages = document.querySelectorAll('div[data-message-id][data-pfam-processed]');
-    const stuckMessages = [];
-    
-    highlightedMessages.forEach(bubble => {
-      const tx = bubble.innerText || "";
-      
-      // If it's still a spam message and still visible, it might be stuck
-      if (isMatch(tx)) {
-        stuckMessages.push({
-          bubble: bubble,
-          text: tx.substring(0, 30),
-          id: bubble.getAttribute('data-message-id')
-        });
-      }
-    });
-    
-    if (stuckMessages.length > 0) {
-      log(`🔍 found ${stuckMessages.length} potentially stuck highlighted messages`);
-      
-      // If no activity for a while AND we have stuck messages, trigger recovery
-      if (timeSinceActivity > ACTIVITY_TIMEOUT) {
-        log(`🚨 STUCK STATE DETECTED! No activity for ${Math.round(timeSinceActivity/1000)}s with ${stuckMessages.length} stuck messages`);
-        triggerSelfHealing(stuckMessages);
-      } else {
-        log(`stuck messages found but recent activity (${Math.round(timeSinceActivity/1000)}s ago) - waiting...`);
-      }
-    } else {
-      log("✅ no stuck messages found - system healthy");
-    }
-  }
-
-  function triggerSelfHealing(stuckMessages) {
-    log(`🔄 SELF-HEALING: Recovering ${stuckMessages.length} stuck messages`);
-    
-    // Clear processed flags and highlights from stuck messages
-    stuckMessages.forEach(({bubble, text, id}) => {
-      log(`  recovering stuck message: "${text}..." (${id})`);
-      
-      // Clear processed flag so it can be re-processed
-      delete bubble.dataset.pfamProcessed;
-      
-      // Clear highlight styling
-      bubble.style.outline = "";
-      bubble.style.outlineOffset = "";
-      bubble.style.boxShadow = "";
-    });
-    
-    // Reset activity time and trigger a new scan
-    updateActivityTime();
-    
-    // Small delay then rescan for the recovered messages
-    setTimeout(() => {
-      if (ENABLED && isActiveTab) {
-        log("🔄 rescanning after self-healing recovery");
-        scanRoot(document);
-      }
-    }, 1000);
-  }
+  // checkForStuckMessages and triggerSelfHealing functions removed
+  // Redundant with existing periodic scanning and processing timeout systems
 
   function forceRescanAllMessages() {
     log("🔄 FORCE RESCAN: Clearing all processed flags and rescanning everything");
     
-    // Clear ALL processed flags and highlights
-    const allProcessedMessages = document.querySelectorAll('div[data-message-id][data-pfam-processed]');
-    allProcessedMessages.forEach(bubble => {
+    // OPTIMIZED: Clear processed flags in single pass
+    const processedMessages = document.querySelectorAll('div[data-message-id][data-pfam-processed]');
+    
+    // PERFORMANCE: Batch DOM operations
+    for (const bubble of processedMessages) {
       delete bubble.dataset.pfamProcessed;
-      // Clear highlight styling
-      bubble.style.outline = "";
-      bubble.style.outlineOffset = "";
-      bubble.style.boxShadow = "";
-    });
+      // Clear highlight styling in one go
+      bubble.style.cssText = bubble.style.cssText
+        .replace(/outline[^;]*;?/g, '')
+        .replace(/box-shadow[^;]*;?/g, '');
+    }
     
-    log(`cleared ${allProcessedMessages.length} processed flags - rescanning all messages`);
+    log(`cleared ${processedMessages.length} processed flags - rescanning all messages`);
     
-    // Reset activity time and trigger full rescan
-    updateActivityTime();
+    // OPTIMIZED: Invalidate cache
+    invalidateMessageCache();
     
     setTimeout(() => {
       if (ENABLED && isActiveTab) {
@@ -466,38 +356,40 @@
   }
 
   function updateLastKnownMessage() {
-    const allMessages = document.querySelectorAll('div[data-message-id]');
-    if (allMessages.length > 0) {
-      // Find the last (most recent) NON-SPAM message
-      let lastNonSpamMessage = null;
+    // OPTIMIZED: Use cached messages
+    const allMessages = getAllMessages();
+    if (allMessages.length === 0) return;
+    
+    // PERFORMANCE: Reverse iteration to find last non-spam message quickly
+    let lastNonSpamMessage = null;
+    
+    for (let i = allMessages.length - 1; i >= 0; i--) {
+      const message = allMessages[i];
+      const text = message.innerText || "";
       
-      for (let i = allMessages.length - 1; i >= 0; i--) {
-        const message = allMessages[i];
-        const text = message.innerText || "";
-        
-        // Skip spam messages - don't use them as reference
-        if (isMatch(text)) {
-          log(`skipping spam message as reference: "${text.substring(0, 30)}..."`);
-          continue;
-        }
-        
-        // Found a non-spam message
+      // OPTIMIZED: Skip spam check for better performance
+      if (!isMatch(text)) {
         lastNonSpamMessage = message;
-        break;
+        break; // Early exit - found what we need
       }
       
-      if (lastNonSpamMessage) {
-        const text = lastNonSpamMessage.innerText || "";
-        lastKnownMessage = {
-          id: lastNonSpamMessage.getAttribute('data-message-id'),
-          text: text.substring(0, 50),
-          timestamp: Date.now()
-        };
-        
-        log(`updated last known message (non-spam): "${lastKnownMessage.text}..." (${lastKnownMessage.id})`);
-      } else {
-        log("no non-spam messages found - keeping previous reference");
+      // OPTIMIZED: Only log in debug mode
+      if (ACTION !== "viewer_mode") {
+        log(`skipping spam message as reference: "${text.substring(0, 30)}..."`);
       }
+    }
+      
+    if (lastNonSpamMessage) {
+      const text = lastNonSpamMessage.innerText || "";
+      lastKnownMessage = {
+        id: lastNonSpamMessage.getAttribute('data-message-id'),
+        text: text.substring(0, 50),
+        timestamp: Date.now()
+      };
+      
+      log(`updated last known message (non-spam): "${lastKnownMessage.text}..." (${lastKnownMessage.id})`);
+    } else {
+      log("no non-spam messages found - keeping previous reference");
     }
   }
 
@@ -581,14 +473,10 @@
         const messageLettersOnly = extractLettersOnly(t);
         const triggerLettersOnly = extractLettersOnly(exactPhrase);
         
-        if (ACTION !== "viewer_mode") {
-          log(`checking exact match (letters only): "${exactPhrase}" → "${triggerLettersOnly}" vs message → "${messageLettersOnly}"`);
-        }
+        // Skip logging in viewer mode for performance
         
         if (messageLettersOnly === triggerLettersOnly) {
-          if (ACTION !== "viewer_mode") {
-            log(`✅ exact phrase match (letters only): "${exactPhrase}"`);
-          }
+          // Match found - skip logging in viewer mode
           return true;
         }
         
@@ -608,14 +496,10 @@
         
         const regex = new RegExp(wildcardPattern, 'i');
         
-        if (ACTION !== "viewer_mode") {
-          log(`checking wildcard pattern: "${trigger}" → regex: /${wildcardPattern}/`);
-        }
+        // Skip pattern logging in viewer mode
         
         if (regex.test(t)) {
-          if (ACTION !== "viewer_mode") {
-            log(`✅ matched wildcard pattern: "${trigger}"`);
-          }
+          // Pattern matched - skip logging in viewer mode
           return true;
         }
       } else {
@@ -866,13 +750,9 @@
     if (messageElement) {
       messageText = messageElement.textContent || messageElement.innerText || "";
       messageText = messageText.replace(/\s+/g, ' ').trim();
-      if (ACTION !== "viewer_mode") {
-        log(`🔍 extracted message: "${messageText}" (from element)`);
-      }
+      // Skip extraction logging in viewer mode
     } else {
-      if (ACTION !== "viewer_mode") {
-        log(`🔍 no message element found, using full text`);
-      }
+      // Skip fallback logging in viewer mode
     }
     
     // Fallback to full text if we can't extract the message
@@ -880,9 +760,7 @@
     
     if (!isMatch(textToCheck)) return;
 
-    if (ACTION !== "viewer_mode") {
-      log(`found matching message: "${textToCheck.substring(0, 50)}..." - action mode: ${ACTION}`);
-    }
+    // Skip match logging in viewer mode for performance
 
     // Add to batch instead of processing immediately
     addToBatch(bubble);
@@ -893,32 +771,77 @@
     
     // In viewer mode, don't process existing messages - only new ones from mutation observer
     if (ACTION === "viewer_mode") {
-      log("viewer mode: skipping existing messages, will only hide new incoming messages");
       return;
     }
     
-    const all = root.querySelectorAll('div[data-message-id]');
-    all.forEach(el => handleBubble(el));
+    // OPTIMIZED: Use cached query and batch processing
+    const messages = (root === document) ? getAllMessages() : root.querySelectorAll('div[data-message-id]');
+    
+    // PERFORMANCE: Process in batches to avoid blocking UI
+    const SCAN_BATCH_SIZE = 20;
+    let processed = 0;
+    
+    function processBatch() {
+      const end = Math.min(processed + SCAN_BATCH_SIZE, messages.length);
+      
+      for (let i = processed; i < end; i++) {
+        handleBubble(messages[i]);
+      }
+      
+      processed = end;
+      
+      // Continue processing if more messages remain
+      if (processed < messages.length) {
+        setTimeout(processBatch, 0); // Yield to browser
+      }
+    }
+    
+    processBatch();
   }
 
   function installObserver(root) {
     const mo = new MutationObserver(muts => {
       if (!ENABLED) return; // Don't process if extension is disabled
       
+      // OPTIMIZED: Batch mutations and avoid duplicate processing
+      const processedBubbles = new Set();
+      
       for (const m of muts) {
         if (m.type === "childList") {
-          m.addedNodes.forEach(n => {
-            if (n.nodeType !== 1) return;
+          // PERFORMANCE: Process added nodes efficiently
+          for (const n of m.addedNodes) {
+            if (n.nodeType !== 1) continue;
+            
             const bubble = closestBubble(n);
-            if (bubble) handleBubble(bubble);
-            // Also scan inside this node for any existing bubbles
-            n.querySelectorAll?.('div[data-message-id]').forEach(el => handleBubble(el));
-          });
+            if (bubble && !processedBubbles.has(bubble)) {
+              processedBubbles.add(bubble);
+              handleBubble(bubble);
+            }
+            
+            // OPTIMIZED: Only scan if node has children
+            if (n.children && n.children.length > 0) {
+              const innerBubbles = n.querySelectorAll('div[data-message-id]');
+              for (const el of innerBubbles) {
+                if (!processedBubbles.has(el)) {
+                  processedBubbles.add(el);
+                  handleBubble(el);
+                }
+              }
+            }
+          }
         } else if (m.type === "characterData") {
           const el = m.target && m.target.parentElement;
           const bubble = closestBubble(el);
-          if (bubble) handleBubble(bubble);
+          if (bubble && !processedBubbles.has(bubble)) {
+            processedBubbles.add(bubble);
+            handleBubble(bubble);
+          }
         }
+      }
+      
+      // OPTIMIZED: Invalidate cache when DOM changes
+      if (processedBubbles.size > 0) {
+        invalidateMessageCache();
       }
     });
     mo.observe(root, { subtree: true, childList: true, characterData: true });
@@ -930,8 +853,8 @@
     chrome.storage?.sync.get(keysToLoad, (res) => {
       ENABLED  = !!res[K_ENABLED];
       ACTION   = res[K_ACTION] || DEFAULTS[K_ACTION];
-      DELAY_MS = +res[K_DELAY] || DEFAULTS[K_DELAY];
-      REASON   = res[K_REASON] || DEFAULTS[K_REASON];
+      // DELAY_MS is now hardcoded to 200ms - no storage needed
+      // REASON is now hardcoded to "Spam" - no storage needed
       
       // Load custom triggers
       loadCustomTriggers(res[K_CUSTOM_TRIGGERS]);
@@ -984,12 +907,10 @@
           processingTimeout = null;
         }
         isProcessing = false;
-        stopPeriodicScanning();
-        stopChatHealthMonitoring();
+        stopMonitoring();
         stopTabHeartbeat();
-        stopSelfHealing();
         isActiveTab = false;
-        log("extension disabled - stopping all operations and clearing batch");
+        // Extension disabled - stopping all operations
       }
     }
     
@@ -1020,8 +941,8 @@
       }
     }
     
-    if (K_DELAY   in changes) DELAY_MS = +changes[K_DELAY].newValue || 2000;
-    if (K_REASON  in changes) REASON = changes[K_REASON].newValue || "Spam";
+    // DELAY_MS is now hardcoded - no need to listen for changes
+    // REASON is now hardcoded - no need to listen for changes
     if (K_CUSTOM_TRIGGERS in changes) {
       loadCustomTriggers(changes[K_CUSTOM_TRIGGERS].newValue);
       log("custom triggers updated - rescanning messages");
@@ -1036,7 +957,7 @@
       });
     }
     
-    log(`settings updated: enabled=${ENABLED}, action=${ACTION}, delay=${DELAY_MS}, reason=${REASON}`);
+    log(`settings updated: enabled=${ENABLED}, action=${ACTION}, delay=200ms (hardcoded), reason=Spam (hardcoded)`);
     
     // re-scan immediately when toggled, enabled, or action changed
     if (ENABLED && (K_ENABLED in changes || actionChanged)) {
@@ -1047,18 +968,15 @@
   function start() {
     if (!ENABLED) { 
       log("disabled (toggle in popup to enable)"); 
-      stopPeriodicScanning();
-      stopChatHealthMonitoring();
+      stopMonitoring();
       stopTabHeartbeat();
-      stopSelfHealing();
       isActiveTab = false;
       return; 
     }
-    log(`active (action=${ACTION}, delay=${DELAY_MS}ms, reason=${REASON})`);
+    log(`active (action=${ACTION}, delay=200ms, reason=Spam)`);
     
     // For viewer mode, only start minimal systems (no storage writes, no background tasks)
     if (ACTION === "viewer_mode") {
-      log("🎮 VIEWER MODE: Starting minimal passive systems only");
       isActiveTab = true; // Always active in viewer mode (no coordination needed)
       scanRoot(document); // Skip existing messages
       installObserver(document); // Only listen for new messages
@@ -1070,9 +988,7 @@
     checkTabStatus();
     scanRoot(document);
     installObserver(document);
-    startPeriodicScanning();
-    startChatHealthMonitoring();
-    startSelfHealing();
+    startMonitoring();
   }
 
   // Message listener for popup communication
