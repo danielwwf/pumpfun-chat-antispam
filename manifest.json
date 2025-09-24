@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "lolnuked StreamGuard",
-  "version": "1.7.0",
+  "version": "1.8.3",
   "description": "Ultimate spam protection for pump.fun streams - auto-delete/ban spam with custom triggers.",
   "icons": {
     "128": "icon128.png"

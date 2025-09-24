@@ -18,15 +18,11 @@
   let isProcessing = false;
   let processingTimeout = null;
   
-  // Batch processing
-  let pendingMessages = new Set();
-  let batchTimeout = null;
-  const BATCH_DELAY = 1000; // Wait 1 second to collect messages before processing
-  const MAX_BATCH_SIZE = 10; // Process max 10 messages at once
+  // Simplified processing queue
+  let processingQueue = [];
+  let processTimeout = null;
   
-  let cachedMessages = null;
-  let cacheTimestamp = 0;
-  const CACHE_DURATION = 1000;
+  // Cache system removed - direct DOM queries are simpler and more reliable
   
   // Unified monitoring system (scanning + health)
   let monitoringInterval = null;
@@ -34,12 +30,8 @@
   let lastKnownMessage = null;
   let healthCheckCounter = 0;
   
-  // Tab registration
-  let tabId = 'tab_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
-  let isActiveTab = false;
-  let tabHeartbeatInterval = null;
-  const TAB_HEARTBEAT_DELAY = 10000; // Send heartbeat every 10 seconds
-  const TAB_HEARTBEAT_TIMEOUT = 15000; // Consider tab dead after 15 seconds
+  // Simplified tab management - assume single tab for 90% of users
+  let isActiveTab = true; // Default to active - most users have one tab
   
   // Self-healing system removed - redundant with periodic scanning
 
@@ -49,57 +41,67 @@
     console.log("%cPF Auto-Mod", "color:#4af;font-weight:bold;", ...args);
   }
 
-  function getAllMessages(forceRefresh = false) {
-    const now = Date.now();
-    if (!forceRefresh && cachedMessages && (now - cacheTimestamp) < CACHE_DURATION) {
-      return cachedMessages; // Return cached result
-    }
+  // Cache functions removed - using direct DOM queries for simplicity
+
+  // VIEWER MODE SPECIALIZATION - Ultra lightweight path
+  function startViewerMode() {
+    // Skip existing messages - only process new ones
+    const observer = new MutationObserver(mutations => {
+      if (!ENABLED) return;
+      
+      for (const mutation of mutations) {
+        if (mutation.type === "childList") {
+          for (const node of mutation.addedNodes) {
+            if (node.nodeType === 1) {
+              const bubble = node.closest?.('div[data-message-id]') || 
+                           (node.matches?.('div[data-message-id]') ? node : null);
+              if (bubble) {
+                handleViewerMode(bubble);
+              }
+            }
+          }
+        }
+      }
+    });
     
-    // Refresh cache
-    cachedMessages = document.querySelectorAll('div[data-message-id]');
-    cacheTimestamp = now;
-    return cachedMessages;
-  }
-  
-  function invalidateMessageCache() {
-    cachedMessages = null;
-    cacheTimestamp = 0;
+    observer.observe(document, { subtree: true, childList: true });
   }
 
-  function addToBatch(bubble) {
+  // Dedicated viewer mode - ultra lightweight
+  function handleViewerMode(bubble) {
+    if (!bubble || !ENABLED || bubble.dataset.pfamProcessed) return;
+    
+    const text = bubble.innerText || "";
+    if (isMatch(text)) {
+      bubble.dataset.pfamProcessed = "1";
+      bubble.style.display = "none";
+    }
+  }
+
+  function addToQueue(bubble) {
     if (!bubble || !ENABLED) return;
     
     if (ACTION === "viewer_mode") {
-      if (isMatch(bubble.innerText || "")) {
-        hideBubble(bubble);
-      }
+      handleViewerMode(bubble);
       return;
     }
     
-    pendingMessages.add(bubble);
+    processingQueue.push(bubble);
     
-    // If batch is full, process immediately
-    if (pendingMessages.size >= MAX_BATCH_SIZE) {
-      processBatch();
-      return;
+    if (!processTimeout) {
+      processTimeout = setTimeout(() => {
+        processQueue();
+      }, 100);
     }
-    
-    if (batchTimeout) clearTimeout(batchTimeout);
-    batchTimeout = setTimeout(() => {
-      processBatch();
-    }, BATCH_DELAY);
   }
 
-  async function processBatch() {
-    if (batchTimeout) {
-      clearTimeout(batchTimeout);
-      batchTimeout = null;
-    }
+  async function processQueue() {
+    processTimeout = null;
     
-    if (pendingMessages.size === 0 || isProcessing) return;
+    if (processingQueue.length === 0 || isProcessing) return;
     
-    const messages = Array.from(pendingMessages);
-    pendingMessages.clear();
+    const messages = [...processingQueue];
+    processingQueue = [];
     
     if (ACTION === "highlight") {
       messages.forEach(bubble => {
@@ -110,7 +112,7 @@
       return;
     }
     
-    // For delete/ban operations, process one by one with lock
+    // For delete/ban operations, process sequentially
     await processMessagesSequentially(messages);
   }
 
@@ -168,7 +170,7 @@
     // After processing batch, check if there are still unprocessed messages
     setTimeout(() => {
       if (!isProcessing && ENABLED) {
-        const allMessages = getAllMessages();
+        const allMessages = document.querySelectorAll('div[data-message-id]');
         const spamMessages = [];
         
         for (const bubble of allMessages) {
@@ -182,7 +184,7 @@
         
         if (spamMessages.length > 0) {
           for (const bubble of spamMessages) {
-            addToBatch(bubble);
+            addToQueue(bubble);
           }
         } else {
           if (ACTION !== "viewer_mode") {
@@ -213,7 +215,7 @@
       if (!ENABLED) return;
       
       // Scan for missed messages (every cycle)
-      if (!isProcessing && pendingMessages.size === 0) {
+      if (!isProcessing && processingQueue.length === 0) {
         const unprocessedMessages = document.querySelectorAll('div[data-message-id]:not([data-pfam-processed])');
         if (unprocessedMessages.length > 0) {
           const spamMessages = [];
@@ -225,9 +227,9 @@
           }
           
           if (spamMessages.length > 0) {
-            for (const bubble of spamMessages) {
-              addToBatch(bubble);
-            }
+        for (const bubble of spamMessages) {
+          addToQueue(bubble);
+        }
           }
         }
       }
@@ -251,77 +253,7 @@
 
   // Chat health functions removed - now part of unified monitoring
 
-  // Tab registration functions
-  function checkTabStatus() {
-    if (!chrome.storage?.local) {
-      // Fallback if chrome.storage.local not available
-      isActiveTab = true;
-      log(`✅ this tab is active (fallback mode): ${tabId}`);
-      return;
-    }
-    
-    chrome.storage.local.get(['activeTabId', 'lastHeartbeat'], (result) => {
-      const now = Date.now();
-      const timeSinceHeartbeat = now - (result.lastHeartbeat || 0);
-      
-      // If no active tab OR heartbeat is old, try to become active
-      if (!result.activeTabId || timeSinceHeartbeat > TAB_HEARTBEAT_TIMEOUT) {
-        becomeActiveTab();
-      } else if (result.activeTabId === tabId) {
-        // This is the active tab
-        isActiveTab = true;
-        log(`✅ this tab is active (${tabId})`);
-        startTabHeartbeat();
-      } else {
-        // This tab is dormant
-        isActiveTab = false;
-        log(`⚪ this tab is dormant - active tab: ${result.activeTabId}`);
-        stopTabHeartbeat();
-      }
-    });
-  }
-
-  function becomeActiveTab() {
-    isActiveTab = true;
-    if (chrome.storage?.local) {
-      chrome.storage.local.set({
-        activeTabId: tabId,
-        lastHeartbeat: Date.now()
-      }, () => {
-        log(`🟢 became active tab (${tabId})`);
-        startTabHeartbeat();
-      });
-    } else {
-      log(`🟢 became active tab (fallback mode): ${tabId}`);
-    }
-  }
-
-  function startTabHeartbeat() {
-    if (ACTION === "viewer_mode" || !chrome.storage?.local) return;
-    if (tabHeartbeatInterval) clearInterval(tabHeartbeatInterval);
-    
-    tabHeartbeatInterval = setInterval(() => {
-      if (isActiveTab && chrome.storage?.local) {
-        try {
-          chrome.storage.local.set({ lastHeartbeat: Date.now() });
-        } catch (error) {
-          log("heartbeat storage error (non-critical)");
-        }
-      }
-    }, TAB_HEARTBEAT_DELAY);
-  }
-
-  function stopTabHeartbeat() {
-    if (tabHeartbeatInterval) {
-      clearInterval(tabHeartbeatInterval);
-      tabHeartbeatInterval = null;
-    }
-  }
-
-  function forceActivateThisTab() {
-    log("🔄 force activating this tab");
-    becomeActiveTab();
-  }
+  // Tab coordination functions removed - simplified to single tab assumption
 
   // Self-healing functions removed - redundant with periodic scanning
 
@@ -345,19 +277,17 @@
     
     log(`cleared ${processedMessages.length} processed flags - rescanning all messages`);
     
-    // OPTIMIZED: Invalidate cache
-    invalidateMessageCache();
+    // Cache system removed - no invalidation needed
     
     setTimeout(() => {
-      if (ENABLED && isActiveTab) {
+      if (ENABLED) {
         scanRoot(document);
       }
     }, 500);
   }
 
   function updateLastKnownMessage() {
-    // OPTIMIZED: Use cached messages
-    const allMessages = getAllMessages();
+    const allMessages = document.querySelectorAll('div[data-message-id]');
     if (allMessages.length === 0) return;
     
     // PERFORMANCE: Reverse iteration to find last non-spam message quickly
@@ -419,36 +349,36 @@
     }
   }
 
-  // Homoglyph mapping (subset; enough for common tricks)
-  const HOMO = {
-    "о":"o","Ο":"o","ο":"o","०":"o","ᴏ":"o","Ｏ":"o","ｏ":"o",
-    "р":"p","Р":"p","ᴘ":"p","Ｐ":"p","ｐ":"p",
-    "ѕ":"s","ʂ":"s","Ｓ":"s","ｓ":"s",
-    "υ":"u","ᴜ":"u","Ｕ":"u","ｕ":"u",
-    "ɡ":"g","ɢ":"g","Ｇ":"g","ｇ":"g",
-    "ʀ":"r","Ｒ":"r","ｒ":"r",
-    "а":"a","Ａ":"a","ａ":"a",
-    "е":"e","Ｅ":"e","ｅ":"e",
-    "і":"i","Ｉ":"i","ｉ":"i",
-    "х":"x","Χ":"x","ｘ":"x","Ｘ":"x",
-    "ј":"j","ȷ":"j"
-  };
-  function unifyHomoglyphs(s) {
-    return s.replace(/[\u00A0-\uFFFF]/g, ch => HOMO[ch] || ch);
-  }
-  function normalizeKeepAt(s) {
-    // keep '@' so the wildcard @*rug* works; strip zero-width & diacritics
-    return unifyHomoglyphs((s || "")
+  // Unified text normalization with homoglyph handling
+  function normalize(text) {
+    if (!text) return "";
+    
+    // Homoglyph replacements (common Unicode tricks)
+    const homoMap = {
+      "о":"o","Ο":"o","ο":"o","०":"o","ᴏ":"o","Ｏ":"o","ｏ":"o",
+      "р":"p","Р":"p","ᴘ":"p","Ｐ":"p","ｐ":"p",
+      "ѕ":"s","ʂ":"s","Ｓ":"s","ｓ":"s",
+      "υ":"u","ᴜ":"u","Ｕ":"u","ｕ":"u",
+      "ɡ":"g","ɢ":"g","Ｇ":"g","ｇ":"g",
+      "ʀ":"r","Ｒ":"r","ｒ":"r",
+      "а":"a","Ａ":"a","ａ":"a",
+      "е":"e","Ｅ":"e","ｅ":"e",
+      "і":"i","Ｉ":"i","ｉ":"i",
+      "х":"x","Χ":"x","ｘ":"x","Ｘ":"x",
+      "ј":"j","ȷ":"j"
+    };
+    
+    return text
       .toLowerCase()
       .normalize("NFKD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .replace(/[\u200B-\u200D\uFEFF]/g, "")
-    );
+      .replace(/[\u0300-\u036f]/g, "") // Remove diacritics
+      .replace(/[\u200B-\u200D\uFEFF]/g, "") // Remove zero-width chars
+      .replace(/[\u00A0-\uFFFF]/g, ch => homoMap[ch] || ch); // Fix homoglyphs
   }
 
   // Matcher: checks custom triggers + legacy hardcoded patterns
   function isMatch(text) {
-    const t = normalizeKeepAt(text);
+    const t = normalize(text);
     if (!t) return false;
     
     // Skip logging in viewer mode to minimize any activity
@@ -467,7 +397,7 @@
         
         // Extract only letters and numbers for comparison (ignore all spaces/punctuation)
         const extractLettersOnly = (str) => {
-          return normalizeKeepAt(str).replace(/[^a-z0-9]/g, '');
+          return normalize(str).replace(/[^a-z0-9]/g, '');
         };
         
         const messageLettersOnly = extractLettersOnly(t);
@@ -483,7 +413,7 @@
         continue;
       }
       
-      const normalizedTrigger = normalizeKeepAt(trigger);
+      const normalizedTrigger = normalize(trigger);
       
       // Handle wildcard patterns (e.g., "full*bundled*dont*buy")
       if (trigger.includes("*")) {
@@ -547,18 +477,50 @@
   }
 
   function getKebabButton(bubble) {
-    // Look for the kebab menu button - should have aria-label="Moderation actions"
+    // Comprehensive kebab button detection
     const selectors = [
       'button[aria-label="Moderation actions"]',
       'button[aria-haspopup="menu"]',
       'button[aria-label*="Moderation"]',
-      'button[title*="Moderation"]'
+      'button[title*="Moderation"]',
+      'button[aria-label*="More"]',
+      'button[aria-label*="Options"]',
+      'button[data-testid*="menu"]',
+      'button[data-testid*="kebab"]',
+      'button[data-testid*="more"]',
+      'button:has(svg)',
+      'button:has([data-icon])',
+      'button:has(.icon)',
+      '[role="button"][aria-haspopup]',
+      'button[class*="menu"]',
+      'button[class*="dropdown"]'
     ];
     
     for (const selector of selectors) {
-      const btn = bubble.querySelector(selector);
-      if (btn && isVisible(btn)) {
-        log(`found kebab button with selector: ${selector}`);
+      try {
+        const btn = bubble.querySelector(selector);
+        if (btn && isVisible(btn)) {
+          log(`found kebab button with selector: ${selector}`);
+          return btn;
+        }
+      } catch (e) {
+        // Skip invalid selectors
+        continue;
+      }
+    }
+    
+    // Fallback: look for any button that might be a menu trigger
+    const allButtons = bubble.querySelectorAll('button');
+    for (const btn of allButtons) {
+      if (isVisible(btn) && (
+        btn.getAttribute('aria-haspopup') ||
+        btn.innerHTML.includes('svg') ||
+        btn.innerHTML.includes('⋮') ||
+        btn.innerHTML.includes('•••') ||
+        btn.classList.toString().includes('menu') ||
+        btn.classList.toString().includes('dropdown')
+      )) {
+        log(`found kebab button via fallback detection`);
         return btn;
       }
     }
@@ -582,164 +544,73 @@
     await sleep(100); // small delay after click
   }
 
-  function normLabel(el) {
-    return normalizeKeepAt(
-      el?.innerText || el?.textContent || el?.getAttribute("aria-label") || el?.title || ""
-    );
-  }
+  // normLabel function removed - was barely used
 
   function findMenuItemByText(needle) {
-    const originalNeedle = needle;
-    needle = normalizeKeepAt(needle);
-    log(`searching for menu item: "${originalNeedle}" (normalized: "${needle}")`);
+    const normalizedNeedle = normalize(needle);
     
-    // Try multiple selectors - start specific, then get more generic
-    const menuSelectors = [
-      '[role="menuitem"]',
-      '[role="option"]', 
-      'div[data-radix-collection-item]',
-      '[data-radix-dropdown-menu-item]',
-      'button[role="menuitem"]',
-      'div[role="menuitem"]',
-      // More generic fallbacks for stubborn menus
-      'button:not([aria-hidden="true"])',
-      'div:not([aria-hidden="true"])',
-      'span:not([aria-hidden="true"])'
-    ];
+    // Essential selectors only
+    const selectors = '[role="menuitem"], [role="option"], div[data-radix-collection-item]';
+    const candidates = document.querySelectorAll(selectors);
     
-    for (const selector of menuSelectors) {
-      const candidates = document.querySelectorAll(selector);
-      for (const el of candidates) {
-        if (!isVisible(el)) continue;
-        
-        // Try multiple text extraction methods
-        const texts = [
-          el.innerText,
-          el.textContent,
-          el.getAttribute("aria-label"),
-          el.title,
-          el.getAttribute("data-label")
-        ].filter(Boolean);
-        
-        for (const text of texts) {
-          const normalized = normalizeKeepAt(text);
-          
-          // Try exact match and partial matches
-          if (normalized === needle || 
-              normalized.includes(needle) || 
-              needle.includes(normalized) ||
-              text.toLowerCase() === originalNeedle.toLowerCase()) {
-            log(`found menu item: "${text}" matches "${originalNeedle}"`);
-            return el;
-          }
-        }
+    for (const el of candidates) {
+      if (!isVisible(el)) continue;
+      
+      const text = el.innerText || el.textContent || el.getAttribute("aria-label") || "";
+      const normalizedText = normalize(text);
+      
+      if (normalizedText.includes(normalizedNeedle) || needle.toLowerCase() === text.toLowerCase()) {
+        return el;
       }
     }
     
-    log(`menu item not found for: "${originalNeedle}"`);
     return null;
   }
 
   async function deleteViaUI(bubble) {
     const kebab = getKebabButton(bubble);
-    if (!kebab) { log("delete: kebab not found"); return false; }
+    if (!kebab) return false;
+    
     await clickEl(kebab);
     await sleep(DELAY_MS);
 
-    // "Delete message"
-    let del = null;
-    for (let i = 0; i < 10 && !del; i++) {
-      del = findMenuItemByText("delete message");
-      if (!del) await sleep(150);
-    }
-    if (!del) { log("delete: menu item not found"); return false; }
+    const del = findMenuItemByText("delete message");
+    if (!del) return false;
 
     await clickEl(del);
-    await sleep(300); // safety
     return true;
   }
 
   async function banViaUI(bubble) {
     const kebab = getKebabButton(bubble);
-    if (!kebab) { log("ban: kebab not found"); return false; }
+    if (!kebab) return false;
+    
     await clickEl(kebab);
     await sleep(DELAY_MS);
 
-    // "Ban user" - try multiple variations and case sensitivity
-    let ban = null;
-    const banVariations = ["ban user", "Ban user", "BAN USER", "ban", "Ban"];
-    
-    for (let i = 0; i < 15 && !ban; i++) {
-      for (const variation of banVariations) {
-        ban = findMenuItemByText(variation);
-        if (ban) {
-          log(`found ban menu item with text: "${variation}"`);
-          break;
-        }
-      }
-      if (!ban) await sleep(200);
-    }
-    
-    if (!ban) { 
-      log("ban: 'Ban user' not found - trying to close menu");
-      // Click somewhere else to close the menu
-      document.body.click();
-      return false; 
-    }
-    
-    log("clicking ban user menu item to open submenu");
-    await clickEl(ban);
-    await sleep(DELAY_MS + 500); // Extra time for submenu to appear
-
-    // Wait for submenu and find reason ("Spam" or "Toxic") - try multiple variations
-    let reason = null;
-    const reasonVariations = [
-      REASON.toLowerCase(),
-      REASON,
-      REASON.toUpperCase(),
-      normalizeKeepAt(REASON)
-    ];
-    
-    log(`looking for ban reason variations: ${reasonVariations.join(', ')}`);
-    
-    for (let i = 0; i < 15 && !reason; i++) {
-      for (const variation of reasonVariations) {
-        reason = findMenuItemByText(variation);
-        if (reason) {
-          log(`found ban reason with variation: "${variation}"`);
-          break;
-        }
-      }
-      if (!reason) {
-        log(`ban reason not found, attempt ${i + 1}/15`);
-        await sleep(300);
-      }
-    }
-    
-    if (!reason) { 
-      log(`ban: reason "${REASON}" not found after submenu opened`);
-      
-      // Debug: show what menu items are actually available
-      const allMenuItems = document.querySelectorAll('[role="menuitem"], [role="option"], div[data-radix-collection-item]');
-      log(`available menu items: ${Array.from(allMenuItems).map(el => `"${el.innerText || el.textContent}"`).join(', ')}`);
-      
+    const ban = findMenuItemByText("ban user");
+    if (!ban) {
       document.body.click(); // Close menu
-      return false; 
+      return false;
     }
     
-    log(`clicking ban reason: "${REASON}"`);
+    await clickEl(ban);
+    await sleep(DELAY_MS + 300);
+
+    const reason = findMenuItemByText("spam");
+    if (!reason) {
+      document.body.click(); // Close menu
+      return false;
+    }
+    
     await clickEl(reason);
-    await sleep(500); // Extra time for ban to process
     return true;
   }
 
   async function handleBubble(bubble) {
     if (!bubble || bubble.dataset.pfamProcessed || !ENABLED) return;
     
-    // Only process if this is the active tab
-    if (!isActiveTab) {
-      return; // Dormant tab - do nothing
-    }
+    // Simplified - always process (single tab assumption)
     
     // Try to extract just the message text, not the username
     let messageText = "";
@@ -762,8 +633,7 @@
 
     // Skip match logging in viewer mode for performance
 
-    // Add to batch instead of processing immediately
-    addToBatch(bubble);
+    addToQueue(bubble);
   }
 
   function scanRoot(root) {
@@ -774,8 +644,7 @@
       return;
     }
     
-    // OPTIMIZED: Use cached query and batch processing
-    const messages = (root === document) ? getAllMessages() : root.querySelectorAll('div[data-message-id]');
+    const messages = root.querySelectorAll('div[data-message-id]');
     
     // PERFORMANCE: Process in batches to avoid blocking UI
     const SCAN_BATCH_SIZE = 20;
@@ -839,10 +708,7 @@
         }
       }
       
-      // OPTIMIZED: Invalidate cache when DOM changes
-      if (processedBubbles.size > 0) {
-        invalidateMessageCache();
-      }
+      // Cache system removed - no invalidation needed
     });
     mo.observe(root, { subtree: true, childList: true, characterData: true });
   }
@@ -895,12 +761,12 @@
     
     if (K_ENABLED in changes) {
       ENABLED = !!changes[K_ENABLED].newValue;
-      // If being disabled, clear pending batches and stop processing
+      // If being disabled, clear processing queue
       if (!ENABLED) {
-        pendingMessages.clear();
-        if (batchTimeout) {
-          clearTimeout(batchTimeout);
-          batchTimeout = null;
+        processingQueue = [];
+        if (processTimeout) {
+          clearTimeout(processTimeout);
+          processTimeout = null;
         }
         if (processingTimeout) {
           clearTimeout(processingTimeout);
@@ -908,8 +774,6 @@
         }
         isProcessing = false;
         stopMonitoring();
-        stopTabHeartbeat();
-        isActiveTab = false;
         // Extension disabled - stopping all operations
       }
     }
@@ -932,11 +796,11 @@
             bubble.style.boxShadow = "";
           }
         });
-        // Clear pending batch since action changed
-        pendingMessages.clear();
-        if (batchTimeout) {
-          clearTimeout(batchTimeout);
-          batchTimeout = null;
+        // Clear processing queue since action changed
+        processingQueue = [];
+        if (processTimeout) {
+          clearTimeout(processTimeout);
+          processTimeout = null;
         }
       }
     }
@@ -969,23 +833,18 @@
     if (!ENABLED) { 
       log("disabled (toggle in popup to enable)"); 
       stopMonitoring();
-      stopTabHeartbeat();
-      isActiveTab = false;
       return; 
     }
     log(`active (action=${ACTION}, delay=200ms, reason=Spam)`);
     
-    // For viewer mode, only start minimal systems (no storage writes, no background tasks)
+    // Start systems based on mode
     if (ACTION === "viewer_mode") {
-      isActiveTab = true; // Always active in viewer mode (no coordination needed)
-      scanRoot(document); // Skip existing messages
-      installObserver(document); // Only listen for new messages
+      startViewerMode();
       return;
     }
     
     // For other modes, start full systems
     log("🛡️ MODERATOR MODE: Starting full systems");
-    checkTabStatus();
     scanRoot(document);
     installObserver(document);
     startMonitoring();
@@ -1000,10 +859,10 @@
     if (request.action === "getTabStatus") {
       sendResponse({
         isActive: isActiveTab,
-        tabId: tabId
+        tabId: "simplified"
       });
     } else if (request.action === "forceActivate") {
-      forceActivateThisTab();
+      isActiveTab = true; // Simple activation
       sendResponse({ success: true });
     } else if (request.action === "triggersUpdated") {
       // Reload triggers from storage
